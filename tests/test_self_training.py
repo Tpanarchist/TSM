@@ -52,6 +52,12 @@ def test_forward_train_returns_loss_dict_and_images():
         "mode_context_separation",
         "mode_context_used_count",
         "mode_count",
+        "ternary_mode_mutual_information",
+        "ternary_context_mutual_information",
+        "ternary_mode_probe_accuracy",
+        "ternary_per_mode_nonzero_fraction",
+        "ternary_axis_usage_count",
+        "ternary_axis_stability",
     }
     ternary_total = (
         out.diagnostics["ternary_zero_fraction"]

@@ -90,10 +90,12 @@ class ImageStreamDataset(Dataset):
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         row = self.ds[idx]
         image = pil_to_tensor(_find_image(row), self.model_cfg)
+        label = torch.tensor(int(row.get("label", -1)), dtype=torch.long)
         return {
             "image_t": image,
             "image_tp1": deterministic_next_image(image, self.data_cfg.seed + idx),
-            "label": torch.tensor(int(row.get("label", -1)), dtype=torch.long),
+            "label": label,
+            "mode": label,
             "dataset_id": torch.tensor(self.dataset_id, dtype=torch.long),
         }
 

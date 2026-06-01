@@ -18,6 +18,7 @@ def test_image_stream_dataset_uses_mock_rows_without_network():
     assert item["image_t"].shape == (1, 28, 28)
     assert item["image_tp1"].shape == (1, 28, 28)
     assert item["label"].item() == 7
+    assert item["mode"].item() == 7
     assert torch.isfinite(item["image_tp1"]).all()
 
 

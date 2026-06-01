@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 from .config import TsmConfig
 from .context import ContextRouter, context_balance_loss, context_entropy
+from .diagnostics import ternary_label_diagnostics
 from .definitions import DefinitionBank
 from .develop import DevelopmentalScheduler
 from .drives import DriveDynamics
@@ -79,11 +80,11 @@ class Self(nn.Module):
         self.trauma = TraumaMonitor()
         self.stage = DevelopmentalScheduler()
 
-    def forward_train(self, batch: dict[str, torch.Tensor]) -> TrainOutput:
+    def forward_train(self, batch: dict[str, torch.Tensor], include_label_diagnostics: bool = True) -> TrainOutput:
         image_t = batch["image_t"]
         image_tp1 = batch["image_tp1"]
         dataset_id = batch.get("dataset_id")
-        mode = batch.get("mode")
+        mode = batch.get("mode", batch.get("label"))
         perception = self.perception(image_t, dataset_id=dataset_id)
         batch_size = image_t.shape[0]
         initial_q = self.mind.initial(batch_size, image_t.device)
@@ -173,6 +174,8 @@ class Self(nn.Module):
                 dtype=image_t.dtype,
                 device=image_t.device,
             )
+            if include_label_diagnostics:
+                diagnostics.update(ternary_label_diagnostics(ternary, mode, context_hard))
         total = (
             self.cfg.recon_weight * losses["reconstruction"]
             + self.cfg.pred_weight * losses["prediction"]

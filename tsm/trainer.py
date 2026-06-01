@@ -139,8 +139,9 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
     for step in progress:
         batch = move_batch(next(iterator), device)
         last_batch = batch
+        should_record = step % cfg.log_interval == 0 or step == 1 or step == cfg.max_steps
         optimizer.zero_grad(set_to_none=True)
-        output = model.forward_train(batch)
+        output = model.forward_train(batch, include_label_diagnostics=should_record)
         output.total_loss.backward()
         if cfg.grad_clip:
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
@@ -154,7 +155,7 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
         }
         first_metrics = first_metrics or metrics
         last_metrics = metrics
-        if step % cfg.log_interval == 0 or step == 1:
+        if should_record:
             append_metrics(metrics_path, metrics)
             progress.set_postfix(total=f"{metrics['total']:.4f}")
         if metrics["total"] < best:
@@ -196,6 +197,12 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                 handle.write(f"- final_mode_context_separation: {last_metrics['mode_context_separation']:.3f}\n")
                 handle.write(f"- final_mode_context_used_count: {last_metrics['mode_context_used_count']:.1f}\n")
                 handle.write(f"- final_mode_count: {last_metrics['mode_count']:.1f}\n")
+            if "ternary_mode_probe_accuracy" in last_metrics:
+                handle.write(f"- final_ternary_mode_probe_accuracy: {last_metrics['ternary_mode_probe_accuracy']:.3f}\n")
+                handle.write(f"- final_ternary_mode_mutual_information: {last_metrics['ternary_mode_mutual_information']:.3f}\n")
+                handle.write(f"- final_ternary_context_mutual_information: {last_metrics['ternary_context_mutual_information']:.3f}\n")
+                handle.write(f"- final_ternary_axis_usage_count: {last_metrics['ternary_axis_usage_count']:.1f}\n")
+                handle.write(f"- final_ternary_axis_stability: {last_metrics['ternary_axis_stability']:.3f}\n")
     return run_dir
 
 
@@ -214,7 +221,7 @@ def evaluate(checkpoint: str | Path, device_name: str = "cuda", split: str = "te
     count = 0
     for batch in tqdm(loader, desc="eval", unit="batch"):
         batch = move_batch(batch, device)
-        output = model.forward_train(batch)
+        output = model.forward_train(batch, include_label_diagnostics=True)
         values = {
             "total": float(output.total_loss.cpu()),
             **scalar_losses(output.losses),
