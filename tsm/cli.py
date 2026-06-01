@@ -6,7 +6,11 @@ from pathlib import Path
 
 from .config import TrainConfig
 from .data import canonical_dataset_name, load_public_dataset
-from .trainer import evaluate, sample, smoke, train
+from .trainer import axis_report, evaluate, run_seed_sweep, sample, smoke, train
+
+
+def _parse_seeds(value: str) -> list[int]:
+    return [int(part.strip()) for part in value.split(",") if part.strip()]
 
 
 def _cmd_data_pull(args: argparse.Namespace) -> None:
@@ -31,9 +35,37 @@ def _cmd_sample(args: argparse.Namespace) -> None:
     print(path)
 
 
+def _cmd_axis_report(args: argparse.Namespace) -> None:
+    path = axis_report(
+        args.checkpoint,
+        out_path=args.out,
+        device_name=args.device,
+        split=args.split,
+        limit=args.limit,
+        min_usage=args.min_usage,
+    )
+    print(path)
+
+
 def _cmd_smoke(args: argparse.Namespace) -> None:
     run_dir = smoke(device_name=args.device, steps=args.steps)
     print(run_dir)
+
+
+def _cmd_seed_sweep(args: argparse.Namespace) -> None:
+    cfg = TrainConfig.from_yaml(args.config)
+    disabled_cfg = TrainConfig.from_yaml(args.disabled_config) if args.disabled_config else None
+    sweep_dir = run_seed_sweep(
+        cfg,
+        device_name=args.device,
+        seeds=_parse_seeds(args.seeds),
+        steps=args.steps,
+        disabled_cfg=disabled_cfg,
+        eval_split=args.eval_split,
+        eval_limit=args.eval_limit,
+        out_dir=args.out,
+    )
+    print(sweep_dir)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -67,6 +99,26 @@ def build_parser() -> argparse.ArgumentParser:
     sample_cmd.add_argument("--device", default="cuda")
     sample_cmd.add_argument("--split", default="test")
     sample_cmd.set_defaults(func=_cmd_sample)
+
+    axis_cmd = sub.add_parser("axis-report")
+    axis_cmd.add_argument("--checkpoint", required=True)
+    axis_cmd.add_argument("--out")
+    axis_cmd.add_argument("--device", default="cuda")
+    axis_cmd.add_argument("--split", default="test")
+    axis_cmd.add_argument("--limit", type=int)
+    axis_cmd.add_argument("--min-usage", type=float, default=1e-6)
+    axis_cmd.set_defaults(func=_cmd_axis_report)
+
+    sweep_cmd = sub.add_parser("seed-sweep")
+    sweep_cmd.add_argument("--config", required=True)
+    sweep_cmd.add_argument("--disabled-config")
+    sweep_cmd.add_argument("--seeds", default="31,37,43")
+    sweep_cmd.add_argument("--steps", type=int)
+    sweep_cmd.add_argument("--device", default="cuda")
+    sweep_cmd.add_argument("--eval-split", default="test")
+    sweep_cmd.add_argument("--eval-limit", type=int)
+    sweep_cmd.add_argument("--out")
+    sweep_cmd.set_defaults(func=_cmd_seed_sweep)
 
     smoke_cmd = sub.add_parser("smoke")
     smoke_cmd.add_argument("--device", default="cuda")

@@ -158,20 +158,29 @@ def _apply_mode_marker(image: torch.Tensor, mode: int) -> torch.Tensor:
     return out
 
 
-def apply_controlled_mode(image: torch.Tensor, mode: int, seed: int) -> torch.Tensor:
+def _mode_variant(split: str | None) -> str:
+    if split in {"test", "validation", "val", "heldout"}:
+        return "heldout"
+    return "train"
+
+
+def apply_controlled_mode(image: torch.Tensor, mode: int, seed: int, split: str | None = "train") -> torch.Tensor:
     gen = torch.Generator().manual_seed(seed)
+    variant = _mode_variant(split)
     if mode == 0:
         out = image.clone()
     elif mode == 1:
-        out = torch.roll(image, shifts=3, dims=-1)
+        shift = -5 if variant == "heldout" else 3
+        out = torch.roll(image, shifts=shift, dims=-1)
     elif mode == 2:
-        out = torch.roll(image, shifts=3, dims=-2)
+        shift = 5 if variant == "heldout" else 3
+        out = torch.roll(image, shifts=shift, dims=-2)
     elif mode == 3:
         out = 1.0 - image
-        box = max(3, image.shape[-1] // 5)
+        box = max(4, image.shape[-1] // 4) if variant == "heldout" else max(3, image.shape[-1] // 5)
         y = int(torch.randint(0, image.shape[-2] - box + 1, (1,), generator=gen).item())
         x = int(torch.randint(0, image.shape[-1] - box + 1, (1,), generator=gen).item())
-        out[..., y : y + box, x : x + box] *= 0.15
+        out[..., y : y + box, x : x + box] *= 0.05 if variant == "heldout" else 0.15
     else:
         raise ValueError(f"unsupported synthetic mode: {mode}")
     return _apply_mode_marker(out.clamp(0.0, 1.0), mode)
@@ -180,13 +189,21 @@ def apply_controlled_mode(image: torch.Tensor, mode: int, seed: int) -> torch.Te
 class MultiModeSyntheticImageStreamDataset(Dataset):
     """Synthetic stream with known transformation regimes for ContextRouter validation."""
 
-    def __init__(self, model_cfg: TsmConfig, length: int = 1024, seed: int = 31, modes: int = 4) -> None:
+    def __init__(
+        self,
+        model_cfg: TsmConfig,
+        length: int = 1024,
+        seed: int = 31,
+        modes: int = 4,
+        split: str = "train",
+    ) -> None:
         if modes != 4:
             raise ValueError("MultiModeSyntheticImageStreamDataset currently supports exactly 4 modes")
         self.model_cfg = model_cfg
         self.length = length
         self.seed = seed
         self.modes = modes
+        self.split = split
         self.dataset_id = _dataset_id("synthetic_modes")
 
     def __len__(self) -> int:
@@ -196,7 +213,7 @@ class MultiModeSyntheticImageStreamDataset(Dataset):
         mode = idx % self.modes
         base = _synthetic_base_image(self.model_cfg, self.seed + idx)
         image = _apply_mode_marker(base, mode)
-        next_image = apply_controlled_mode(base, mode, self.seed * 100 + idx)
+        next_image = apply_controlled_mode(base, mode, self.seed * 100 + idx, self.split)
         return {
             "image_t": image,
             "image_tp1": next_image,
@@ -210,6 +227,7 @@ def make_dataset(data_cfg: DatasetConfig, model_cfg: TsmConfig) -> Dataset:
     if data_cfg.name == "synthetic":
         return SyntheticImageStreamDataset(model_cfg, length=data_cfg.limit or 512, seed=data_cfg.seed)
     if data_cfg.name in {"synthetic_modes", "synthetic_multimode"}:
-        return MultiModeSyntheticImageStreamDataset(model_cfg, length=data_cfg.limit or 1024, seed=data_cfg.seed)
+        split = data_cfg.variant or data_cfg.split
+        return MultiModeSyntheticImageStreamDataset(model_cfg, length=data_cfg.limit or 1024, seed=data_cfg.seed, split=split)
     Path(data_cfg.cache_dir).mkdir(parents=True, exist_ok=True)
     return ImageStreamDataset(data_cfg, model_cfg)

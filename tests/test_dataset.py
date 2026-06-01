@@ -31,3 +31,12 @@ def test_multimode_synthetic_dataset_exposes_known_modes():
     assert modes == [0, 1, 2, 3, 0, 1, 2, 3]
     assert ds[0]["image_t"].shape == (1, 28, 28)
     assert ds[0]["image_tp1"].shape == (1, 28, 28)
+
+
+def test_multimode_synthetic_test_split_uses_heldout_variants():
+    cfg = TsmConfig(d_model=16, image_size=28, image_channels=1)
+    train = MultiModeSyntheticImageStreamDataset(cfg, length=8, seed=11, split="train")
+    heldout = MultiModeSyntheticImageStreamDataset(cfg, length=8, seed=11, split="test")
+
+    assert torch.equal(train[1]["image_t"], heldout[1]["image_t"])
+    assert not torch.equal(train[1]["image_tp1"], heldout[1]["image_tp1"])

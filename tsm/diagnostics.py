@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 
 
@@ -137,3 +139,62 @@ def ternary_label_diagnostics(
     }
     metrics.update(_per_mode_nonzero(nonzero, labels, dtype))
     return metrics
+
+
+def ternary_axis_specialization(
+    ternary: torch.Tensor,
+    labels: torch.Tensor,
+    min_usage: float = 0.0,
+) -> list[dict[str, Any]]:
+    labels = labels.detach().cpu().to(torch.long)
+    valid = labels >= 0
+    if ternary.numel() == 0 or not bool(valid.any().item()):
+        return []
+
+    signs = ternary.detach().cpu().sign()[valid]
+    labels = labels[valid]
+    modes = [int(label.item()) for label in labels.unique(sorted=True)]
+    axes: list[dict[str, Any]] = []
+    for axis in range(signs.shape[1]):
+        axis_sign = signs[:, axis]
+        usage_fraction = float((axis_sign != 0).to(torch.float32).mean().item())
+        if usage_fraction < min_usage:
+            continue
+        positive_modes: list[int] = []
+        negative_modes: list[int] = []
+        neutral_modes: list[int] = []
+        mode_fractions: dict[str, dict[str, float]] = {}
+        stability_values: list[float] = []
+        for mode in modes:
+            selected = axis_sign[labels == mode]
+            pos = float((selected > 0).to(torch.float32).mean().item())
+            neg = float((selected < 0).to(torch.float32).mean().item())
+            neutral = float((selected == 0).to(torch.float32).mean().item())
+            mode_fractions[str(mode)] = {
+                "positive": pos,
+                "negative": neg,
+                "neutral": neutral,
+                "nonzero": pos + neg,
+            }
+            dominant_value = max((pos, "positive"), (neg, "negative"), (neutral, "neutral"))[1]
+            if dominant_value == "positive":
+                positive_modes.append(mode)
+            elif dominant_value == "negative":
+                negative_modes.append(mode)
+            else:
+                neutral_modes.append(mode)
+            active = pos + neg
+            if active > 0:
+                stability_values.append(max(pos, neg) / active)
+        axes.append(
+            {
+                "axis_id": axis,
+                "usage_fraction": usage_fraction,
+                "stability": sum(stability_values) / len(stability_values) if stability_values else 0.0,
+                "positive_modes": positive_modes,
+                "negative_modes": negative_modes,
+                "neutral_modes": neutral_modes,
+                "mode_fractions": mode_fractions,
+            }
+        )
+    return axes

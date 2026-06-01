@@ -40,6 +40,7 @@ class DatasetConfig:
     cache_dir: str = "data/hf"
     limit: int | None = None
     seed: int = 17
+    variant: str | None = None
 
 
 @dataclass

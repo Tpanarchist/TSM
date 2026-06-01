@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import math
 import random
@@ -15,6 +16,7 @@ from tqdm import tqdm
 
 from .config import DatasetConfig, TrainConfig, TsmConfig
 from .data import make_dataset
+from .diagnostics import ternary_axis_specialization, ternary_label_diagnostics
 from .self_field import Self
 
 
@@ -47,6 +49,13 @@ def make_run_dir(cfg: TrainConfig) -> Path:
 def append_metrics(path: Path, metrics: dict[str, float | int]) -> None:
     with open(path, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(metrics, sort_keys=True) + "\n")
+
+
+def read_metrics(path: Path) -> list[dict[str, float | int]]:
+    if not path.exists():
+        return []
+    with open(path, "r", encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle if line.strip()]
 
 
 def scalar_losses(losses: dict[str, torch.Tensor]) -> dict[str, float]:
@@ -213,6 +222,7 @@ def evaluate(checkpoint: str | Path, device_name: str = "cuda", split: str = "te
     model.eval()
     data_cfg = DatasetConfig(**cfg.dataset.__dict__)
     data_cfg.split = split
+    data_cfg.variant = split
     if limit is not None:
         data_cfg.limit = limit
     dataset = make_dataset(data_cfg, cfg.model)
@@ -234,6 +244,145 @@ def evaluate(checkpoint: str | Path, device_name: str = "cuda", split: str = "te
 
 
 @torch.no_grad()
+def axis_report(
+    checkpoint: str | Path,
+    out_path: str | Path | None = None,
+    device_name: str = "cuda",
+    split: str = "test",
+    limit: int | None = None,
+    min_usage: float = 1e-6,
+) -> Path:
+    device = resolve_device(device_name)
+    model, cfg, _payload = load_model_from_checkpoint(checkpoint, device)
+    model.eval()
+    data_cfg = DatasetConfig(**cfg.dataset.__dict__)
+    data_cfg.split = split
+    data_cfg.variant = split
+    if limit is not None:
+        data_cfg.limit = limit
+    dataset = make_dataset(data_cfg, cfg.model)
+    loader = DataLoader(dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
+
+    ternary_chunks: list[torch.Tensor] = []
+    mode_chunks: list[torch.Tensor] = []
+    context_chunks: list[torch.Tensor] = []
+    for batch in tqdm(loader, desc="axis-report", unit="batch"):
+        batch = move_batch(batch, device)
+        output = model.forward_train(batch, include_label_diagnostics=False)
+        ternary_chunks.append(output.ternary.detach().cpu())
+        mode_chunks.append(batch.get("mode", batch.get("label")).detach().cpu())
+        context_chunks.append(output.context.probs.argmax(dim=-1).detach().cpu())
+    if not ternary_chunks:
+        raise RuntimeError("axis report has no batches to inspect")
+
+    ternary = torch.cat(ternary_chunks, dim=0)
+    modes = torch.cat(mode_chunks, dim=0)
+    contexts = torch.cat(context_chunks, dim=0)
+    diagnostics = {
+        key: float(value.detach().cpu())
+        for key, value in ternary_label_diagnostics(ternary, modes, contexts).items()
+    }
+    axes = ternary_axis_specialization(ternary, modes, min_usage=min_usage)
+    report = {
+        "checkpoint": str(checkpoint),
+        "split": split,
+        "rows": int(ternary.shape[0]),
+        "min_usage": min_usage,
+        "diagnostics": diagnostics,
+        "axes": axes,
+    }
+    if out_path is None:
+        checkpoint_path = Path(checkpoint)
+        out_path = checkpoint_path.parent.parent / f"axis_specialization_{split}.json"
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", encoding="utf-8") as handle:
+        json.dump(report, handle, indent=2, sort_keys=True)
+    return out
+
+
+def _metric(metrics: dict[str, float | int], key: str) -> float:
+    return float(metrics.get(key, float("nan")))
+
+
+def run_seed_sweep(
+    cfg: TrainConfig,
+    device_name: str = "cuda",
+    seeds: list[int] | None = None,
+    steps: int | None = None,
+    disabled_cfg: TrainConfig | None = None,
+    eval_split: str = "test",
+    eval_limit: int | None = None,
+    out_dir: str | Path | None = None,
+) -> Path:
+    seeds = seeds or [cfg.dataset.seed]
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    sweep_dir = Path(out_dir) if out_dir is not None else Path(cfg.runs_dir) / f"{stamp}_ternary_seed_sweep"
+    sweep_dir.mkdir(parents=True, exist_ok=True)
+
+    rows: list[dict[str, object]] = []
+    configs = [("enabled", cfg)]
+    if disabled_cfg is not None:
+        configs.append(("disabled", disabled_cfg))
+    for seed in seeds:
+        for condition, base_cfg in configs:
+            run_cfg = copy.deepcopy(base_cfg)
+            run_cfg.dataset.seed = seed
+            if steps is not None:
+                run_cfg.max_steps = steps
+            run_cfg.run_name = f"{base_cfg.run_name}_{condition}_seed_{seed}"
+            run_cfg.runs_dir = str(sweep_dir / "runs")
+            run_dir = train(run_cfg, device_name=device_name)
+            checkpoint = run_dir / "checkpoints" / "best.pt"
+            heldout = evaluate(checkpoint, device_name=device_name, split=eval_split, limit=eval_limit)
+            report_path = axis_report(
+                checkpoint,
+                device_name=device_name,
+                split=eval_split,
+                limit=eval_limit,
+            )
+            with open(report_path, "r", encoding="utf-8") as handle:
+                report = json.load(handle)
+            metrics = read_metrics(run_dir / "metrics.jsonl")
+            rows.append(
+                {
+                    "seed": seed,
+                    "condition": condition,
+                    "run_dir": str(run_dir),
+                    "checkpoint": str(checkpoint),
+                    "axis_report": str(report_path),
+                    "train_final": metrics[-1] if metrics else {},
+                    "heldout": heldout,
+                    "axis_diagnostics": report["diagnostics"],
+                }
+            )
+
+    with open(sweep_dir / "sweep_summary.json", "w", encoding="utf-8") as handle:
+        json.dump({"seeds": seeds, "eval_split": eval_split, "runs": rows}, handle, indent=2, sort_keys=True)
+    with open(sweep_dir / "sweep_summary.md", "w", encoding="utf-8") as handle:
+        handle.write("# Ternary Seed Sweep\n\n")
+        handle.write(f"- eval_split: {eval_split}\n")
+        handle.write(f"- seeds: {', '.join(str(seed) for seed in seeds)}\n\n")
+        handle.write("| seed | condition | heldout_total | heldout_prediction | probe | mi | nonzero | axis_usage | run |\n")
+        handle.write("|---:|---|---:|---:|---:|---:|---:|---:|---|\n")
+        for row in rows:
+            heldout = row["heldout"]
+            axis = row["axis_diagnostics"]
+            handle.write(
+                "| "
+                f"{row['seed']} | {row['condition']} | "
+                f"{_metric(heldout, 'total'):.6f} | "
+                f"{_metric(heldout, 'prediction'):.6f} | "
+                f"{_metric(axis, 'ternary_mode_probe_accuracy'):.3f} | "
+                f"{_metric(axis, 'ternary_mode_mutual_information'):.3f} | "
+                f"{_metric(heldout, 'ternary_nonzero_fraction'):.3f} | "
+                f"{_metric(axis, 'ternary_axis_usage_count'):.1f} | "
+                f"{row['run_dir']} |\n"
+            )
+    return sweep_dir
+
+
+@torch.no_grad()
 def sample(checkpoint: str | Path, out_dir: str | Path, device_name: str = "cuda", split: str = "test") -> Path:
     device = resolve_device(device_name)
     model, cfg, _payload = load_model_from_checkpoint(checkpoint, device)
@@ -242,6 +391,7 @@ def sample(checkpoint: str | Path, out_dir: str | Path, device_name: str = "cuda
     out_path.mkdir(parents=True, exist_ok=True)
     data_cfg = DatasetConfig(**cfg.dataset.__dict__)
     data_cfg.split = split
+    data_cfg.variant = split
     data_cfg.limit = min(data_cfg.limit or 32, 32)
     dataset = make_dataset(data_cfg, cfg.model)
     loader = DataLoader(dataset, batch_size=min(cfg.batch_size, 16), shuffle=False, num_workers=0)
