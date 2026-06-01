@@ -165,7 +165,13 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
             mode = batch.get("mode", batch.get("label"))
             if mode is not None:
                 impacts = model.ternary_prediction_impacts(output, batch["image_tp1"])
-                hardening_metrics = definition_tracker.update(step, output.ternary, mode, impacts)
+                hardening_metrics = definition_tracker.update(
+                    step,
+                    output.ternary,
+                    mode,
+                    impacts,
+                    prediction_loss=output.losses["prediction"],
+                )
         optimizer.step()
         last_output = output
         metrics = {
@@ -228,7 +234,11 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
             if "definition_hardened_count" in last_metrics:
                 handle.write(f"- final_definition_candidate_count: {last_metrics['definition_candidate_count']:.1f}\n")
                 handle.write(f"- final_definition_hardened_count: {last_metrics['definition_hardened_count']:.1f}\n")
+                handle.write(f"- final_definition_softened_count: {last_metrics['definition_softened_count']:.1f}\n")
+                handle.write(f"- final_definition_rejected_count: {last_metrics['definition_rejected_count']:.1f}\n")
                 handle.write(f"- final_definition_ready_window_count: {last_metrics['definition_ready_window_count']:.1f}\n")
+                handle.write(f"- final_definition_counter_window_count: {last_metrics['definition_counter_window_count']:.1f}\n")
+                handle.write(f"- final_definition_quarantined_update_count: {last_metrics['definition_quarantined_update_count']:.1f}\n")
                 handle.write(f"- final_definition_mean_ready_mode_mi: {last_metrics['definition_mean_ready_mode_mi']:.3f}\n")
                 handle.write(f"- final_definition_mean_ready_prediction_impact: {last_metrics['definition_mean_ready_prediction_impact']:.6f}\n")
     if definition_tracker is not None:

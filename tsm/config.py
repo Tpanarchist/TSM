@@ -52,7 +52,12 @@ class DefinitionHardeningConfig:
     min_mode_mutual_information: float = 0.02
     min_prediction_impact: float = 1e-7
     harden_after_windows: int = 3
+    soften_after_windows: int = 3
+    reject_after_windows: int = 6
     recent_window_limit: int = 8
+    min_valid_modes: int = 2
+    quarantine_loss_z: float = 3.0
+    min_loss_history: int = 5
 
 
 @dataclass
