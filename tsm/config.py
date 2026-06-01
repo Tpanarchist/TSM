@@ -45,6 +45,9 @@ class TsmConfig:
     reappearance_file_query_hard_weight: float = 1.0
     active_file_query_weight: float = 0.0
     active_file_query_temperature: float = 0.25
+    active_file_expectation_weight: float = 0.0
+    active_file_expectation_temperature: float = 0.25
+    active_file_expectation_detach_inputs: bool = True
     active_file_candidate_radius: float = 10.0
     active_file_candidate_max_age: float = 8.0
     active_file_candidate_wrap: bool = False
@@ -53,6 +56,7 @@ class TsmConfig:
     learned_active_file_gate_threshold: float = 0.5
     learned_active_file_gate_detach_inputs: bool = True
     learned_active_file_gate_context_features: bool = False
+    learned_active_file_gate_expectation_features: bool = False
 
 
 @dataclass

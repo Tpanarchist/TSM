@@ -1,7 +1,13 @@
 import torch
 
 from tsm.config import TsmConfig
-from tsm.self_field import Self, _active_file_candidate_mask, _active_file_gate_input_dim, _active_file_gate_logits
+from tsm.self_field import (
+    Self,
+    _active_file_candidate_mask,
+    _active_file_expectation,
+    _active_file_gate_input_dim,
+    _active_file_gate_logits,
+)
 
 
 def test_forward_train_returns_loss_dict_and_images():
@@ -40,6 +46,7 @@ def test_forward_train_returns_loss_dict_and_images():
         "object_cycle_consistency",
         "reappearance_file_query",
         "active_file_query",
+        "active_file_expectation",
         "learned_active_file_gate",
     }
     assert set(out.diagnostics) >= {
@@ -123,6 +130,7 @@ def test_active_file_gate_accepts_context_features():
         attention_heads=4,
         inference_steps=1,
         learned_active_file_gate_context_features=True,
+        learned_active_file_gate_expectation_features=True,
     )
     model = Self(cfg)
     query = torch.rand(2, cfg.definitions_per_context)
@@ -131,6 +139,7 @@ def test_active_file_gate_accepts_context_features():
     age = torch.zeros(2, 1)
     query_context = torch.softmax(torch.rand(2, cfg.contexts), dim=-1)
     file_context = torch.softmax(torch.rand(2, cfg.contexts), dim=-1)
+    expected_query = torch.rand(2, cfg.definitions_per_context)
 
     assert model.active_file_gate[0].in_features == _active_file_gate_input_dim(cfg)
     logits = _active_file_gate_logits(
@@ -142,9 +151,40 @@ def test_active_file_gate_accepts_context_features():
         8.0,
         query_context,
         file_context,
+        expected_query,
     )
 
     assert logits.shape == (2, 2)
+
+
+def test_active_file_expectation_predicts_query_shape():
+    cfg = TsmConfig(
+        d_model=32,
+        workspace_latents=8,
+        contexts=3,
+        definitions_per_context=4,
+        image_size=16,
+        image_channels=1,
+        patch_size=4,
+        attention_heads=4,
+        inference_steps=1,
+    )
+    model = Self(cfg)
+    files = torch.rand(2, cfg.definitions_per_context)
+    file_context = torch.softmax(torch.rand(2, cfg.contexts), dim=-1)
+    confidence = torch.ones(2, 1)
+    age = torch.zeros(2, 1)
+
+    expected_query = _active_file_expectation(
+        model.active_file_expectation,
+        files,
+        file_context,
+        confidence,
+        age,
+        8.0,
+    )
+
+    assert expected_query.shape == (2, cfg.definitions_per_context)
 
 
 def test_forward_train_reports_temporal_object_diagnostics():
@@ -158,7 +198,9 @@ def test_forward_train_reports_temporal_object_diagnostics():
         patch_size=4,
         attention_heads=4,
         inference_steps=1,
+        active_file_expectation_weight=0.003,
         learned_active_file_gate_context_features=True,
+        learned_active_file_gate_expectation_features=True,
     )
     model = Self(cfg)
     batch = {
@@ -221,6 +263,9 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_query_file_paired_feature_match_accuracy",
         "reappeared_query_file_instance_match_accuracy",
         "reappeared_query_file_instance_hard_match_accuracy",
+        "reappeared_expected_file_paired_feature_match_accuracy",
+        "reappeared_expected_file_instance_match_accuracy",
+        "reappeared_expected_file_instance_hard_match_accuracy",
         "reappeared_active_query_file_candidate_instance_match_accuracy",
         "reappeared_active_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_active_query_file_candidate_mean_count",

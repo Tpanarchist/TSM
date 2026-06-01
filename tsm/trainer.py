@@ -81,7 +81,7 @@ def save_checkpoint(path: Path, model: Self, optimizer: torch.optim.Optimizer | 
 def _load_model_state(model: Self, state: dict[str, torch.Tensor]) -> None:
     result = model.load_state_dict(state, strict=False)
     allowed_missing = {"defs.file_query.weight"}
-    allowed_missing_prefixes = ("active_file_gate.",)
+    allowed_missing_prefixes = ("active_file_gate.", "active_file_expectation.")
     missing = set(result.missing_keys)
     unexpected = set(result.unexpected_keys)
     disallowed_missing = {
@@ -303,6 +303,9 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                 handle.write(f"- final_reappeared_target_file_hard_instance_match_accuracy: {last_metrics['reappeared_target_file_instance_hard_match_accuracy']:.3f}\n")
                 handle.write(f"- final_reappeared_query_file_instance_match_accuracy: {last_metrics['reappeared_query_file_instance_match_accuracy']:.3f}\n")
                 handle.write(f"- final_reappeared_query_file_hard_instance_match_accuracy: {last_metrics['reappeared_query_file_instance_hard_match_accuracy']:.3f}\n")
+                if "reappeared_expected_file_instance_match_accuracy" in last_metrics:
+                    handle.write(f"- final_reappeared_expected_file_instance_match_accuracy: {last_metrics['reappeared_expected_file_instance_match_accuracy']:.3f}\n")
+                    handle.write(f"- final_reappeared_expected_file_hard_instance_match_accuracy: {last_metrics['reappeared_expected_file_instance_hard_match_accuracy']:.3f}\n")
                 if "reappeared_active_query_file_candidate_instance_match_accuracy" in last_metrics:
                     handle.write(f"- final_reappeared_active_query_file_match_accuracy: {last_metrics['reappeared_active_query_file_candidate_instance_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_active_query_file_hard_match_accuracy: {last_metrics['reappeared_active_query_file_candidate_instance_hard_match_accuracy']:.3f}\n")

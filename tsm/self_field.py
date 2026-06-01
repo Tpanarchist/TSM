@@ -194,7 +194,33 @@ def _active_file_gate_input_dim(cfg: TsmConfig) -> int:
     dim = cfg.definitions_per_context * 4 + 2
     if cfg.learned_active_file_gate_context_features:
         dim += cfg.contexts * 3
+    if cfg.learned_active_file_gate_expectation_features:
+        dim += cfg.definitions_per_context * 3
     return dim
+
+
+def _active_file_expectation_input_dim(cfg: TsmConfig) -> int:
+    return cfg.definitions_per_context + cfg.contexts + 2
+
+
+def _active_file_expectation(
+    expectation: nn.Module,
+    files: torch.Tensor,
+    file_context: torch.Tensor,
+    file_confidence: torch.Tensor,
+    file_age: torch.Tensor,
+    age_scale: float,
+) -> torch.Tensor:
+    if files.numel() == 0:
+        return torch.zeros((0, files.shape[-1]), dtype=files.dtype, device=files.device)
+    count = min(files.shape[0], file_context.shape[0], file_confidence.shape[0], file_age.shape[0])
+    files = files[:count]
+    file_context = file_context[:count].to(device=files.device, dtype=files.dtype)
+    confidence = file_confidence[:count].to(device=files.device, dtype=files.dtype)
+    age = file_age[:count].to(device=files.device, dtype=files.dtype)
+    age = torch.log1p(age.clamp_min(0.0)) / max(age_scale, 1.0)
+    features = torch.cat([files, file_context, confidence, age], dim=-1)
+    return files + expectation(features)
 
 
 def _active_file_gate_logits(
@@ -206,12 +232,15 @@ def _active_file_gate_logits(
     age_scale: float,
     query_context: torch.Tensor | None = None,
     file_context: torch.Tensor | None = None,
+    expected_query: torch.Tensor | None = None,
 ) -> torch.Tensor:
     if query.numel() == 0 or files.numel() == 0:
         return torch.zeros((0, 0), dtype=query.dtype, device=query.device)
     count = min(query.shape[0], files.shape[0], file_confidence.shape[0], file_age.shape[0])
     if query_context is not None and file_context is not None:
         count = min(count, query_context.shape[0], file_context.shape[0])
+    if expected_query is not None:
+        count = min(count, expected_query.shape[0])
     query = query[:count]
     files = files[:count].to(device=query.device, dtype=query.dtype)
     confidence = file_confidence[:count].view(1, count, 1).to(device=query.device, dtype=query.dtype)
@@ -238,6 +267,14 @@ def _active_file_gate_logits(
             query_context_pairs,
             file_context_pairs,
             (query_context_pairs - file_context_pairs).abs(),
+        ])
+    if expected_query is not None:
+        expected_query = expected_query[:count].to(device=query.device, dtype=query.dtype)
+        expected_pairs = expected_query.unsqueeze(0).expand(count, count, -1)
+        feature_parts.extend([
+            expected_pairs,
+            (query_pairs - expected_pairs).abs(),
+            query_pairs * expected_pairs,
         ])
     features = torch.cat(feature_parts, dim=-1)
     return gate(features).squeeze(-1)
@@ -374,6 +411,15 @@ class Self(nn.Module):
             nn.GELU(),
             nn.Linear(gate_hidden, 1),
         )
+        expectation_input = _active_file_expectation_input_dim(self.cfg)
+        expectation_hidden = max(16, self.cfg.definitions_per_context * 2)
+        self.active_file_expectation = nn.Sequential(
+            nn.Linear(expectation_input, expectation_hidden),
+            nn.GELU(),
+            nn.Linear(expectation_hidden, self.cfg.definitions_per_context),
+        )
+        nn.init.zeros_(self.active_file_expectation[-1].weight)
+        nn.init.zeros_(self.active_file_expectation[-1].bias)
         self.drive_dynamics = DriveDynamics()
         self.memory = Memory()
         self.evidence = EvidenceAccumulator()
@@ -545,12 +591,14 @@ class Self(nn.Module):
         object_cycle_consistency = _zero_like_scalar(image_t)
         reappearance_file_query = _zero_like_scalar(image_t)
         active_file_query = _zero_like_scalar(image_t)
+        active_file_expectation = _zero_like_scalar(image_t)
         learned_active_file_gate = _zero_like_scalar(image_t)
         needs_reappearance_target = (
             self.cfg.reappearance_alignment_weight > 0.0
             or self.cfg.object_cycle_weight > 0.0
             or self.cfg.reappearance_file_query_weight > 0.0
             or self.cfg.active_file_query_weight > 0.0
+            or self.cfg.active_file_expectation_weight > 0.0
             or self.cfg.learned_active_file_gate_weight > 0.0
         )
         if needs_reappearance_target and "visible_tp1" in batch and "occluded_t" in batch:
@@ -580,6 +628,8 @@ class Self(nn.Module):
                     self.cfg.object_cycle_weight > 0.0
                     or self.cfg.reappearance_file_query_weight > 0.0
                     or self.cfg.active_file_query_weight > 0.0
+                    or self.cfg.active_file_expectation_weight > 0.0
+                    or self.cfg.learned_active_file_gate_expectation_features
                     or self.cfg.learned_active_file_gate_weight > 0.0
                 )
                 if needs_file_anchor:
@@ -593,6 +643,30 @@ class Self(nn.Module):
                         target_context_probs,
                         memory_definition_confidence[reappeared_for_alignment],
                     )
+                    target_query_scores = self.defs.file_query_scores(target_scores)
+                expected_query_scores = None
+                needs_file_expectation = (
+                    self.cfg.active_file_expectation_weight > 0.0
+                    or self.cfg.learned_active_file_gate_expectation_features
+                )
+                if needs_file_expectation:
+                    expectation_file_scores = source_file_scores
+                    expectation_file_context = context.probs[reappeared_for_alignment]
+                    expectation_confidence = memory_definition_confidence[reappeared_for_alignment]
+                    expectation_age = memory_read.age[reappeared_for_alignment]
+                    if self.cfg.active_file_expectation_detach_inputs:
+                        expectation_file_scores = expectation_file_scores.detach()
+                        expectation_file_context = expectation_file_context.detach()
+                        expectation_confidence = expectation_confidence.detach()
+                        expectation_age = expectation_age.detach()
+                    expected_query_scores = _active_file_expectation(
+                        self.active_file_expectation,
+                        expectation_file_scores,
+                        expectation_file_context,
+                        expectation_confidence,
+                        expectation_age,
+                        self.cfg.active_file_candidate_max_age,
+                    )
                 if self.cfg.object_cycle_weight > 0.0:
                     object_cycle_consistency = _object_cycle_loss(
                         source_reappeared_scores,
@@ -604,7 +678,6 @@ class Self(nn.Module):
                         self.cfg.object_cycle_file_weight,
                     )
                 if self.cfg.reappearance_file_query_weight > 0.0:
-                    target_query_scores = self.defs.file_query_scores(target_scores)
                     file_query_pair = _bidirectional_paired_contrastive_loss(
                         target_query_scores,
                         target_file_scores,
@@ -624,11 +697,16 @@ class Self(nn.Module):
                     reappearance_file_query = (
                         file_query_pair + self.cfg.reappearance_file_query_hard_weight * file_query_hard
                     )
+                if self.cfg.active_file_expectation_weight > 0.0 and expected_query_scores is not None:
+                    active_file_expectation = _paired_contrastive_loss(
+                        expected_query_scores,
+                        target_query_scores,
+                        self.cfg.active_file_expectation_temperature,
+                    )
                 if (
                     (self.cfg.active_file_query_weight > 0.0 or self.cfg.learned_active_file_gate_weight > 0.0)
                     and "object_position_tp1" in batch
                 ):
-                    target_query_scores = self.defs.file_query_scores(target_scores)
                     active_candidates = _active_file_candidate_mask(
                         memory_read.position[reappeared_for_alignment],
                         batch["object_position_tp1"].to(device=image_t.device, dtype=image_t.dtype)[
@@ -669,6 +747,11 @@ class Self(nn.Module):
                         if not self.cfg.learned_active_file_gate_context_features:
                             gate_query_context = None
                             gate_file_context = None
+                        gate_expected_query = (
+                            expected_query_scores
+                            if self.cfg.learned_active_file_gate_expectation_features
+                            else None
+                        )
                         learned_logits = _active_file_gate_logits(
                             self.active_file_gate,
                             gate_query_scores,
@@ -678,6 +761,7 @@ class Self(nn.Module):
                             self.cfg.active_file_candidate_max_age,
                             gate_query_context,
                             gate_file_context,
+                            gate_expected_query,
                         )
                         if learned_logits.numel() > 0:
                             count = min(learned_logits.shape[0], learned_logits.shape[1], active_candidates.shape[0])
@@ -714,6 +798,7 @@ class Self(nn.Module):
             "object_cycle_consistency": object_cycle_consistency,
             "reappearance_file_query": reappearance_file_query,
             "active_file_query": active_file_query,
+            "active_file_expectation": active_file_expectation,
             "learned_active_file_gate": learned_active_file_gate,
         }
         diagnostics = {
@@ -1051,6 +1136,19 @@ class Self(nn.Module):
                         memory_definition_confidence[reappeared_active],
                     )
                     target_query_scores = self.defs.file_query_scores(target_definition_scores)
+                    expected_query_scores = None
+                    if (
+                        self.cfg.active_file_expectation_weight > 0.0
+                        or self.cfg.learned_active_file_gate_expectation_features
+                    ):
+                        expected_query_scores = _active_file_expectation(
+                            self.active_file_expectation,
+                            object_file_scores,
+                            context.probs[reappeared_active],
+                            memory_definition_confidence[reappeared_active],
+                            memory_read.age[reappeared_active],
+                            self.cfg.active_file_candidate_max_age,
+                        )
                     source_labels = object_id[reappeared_active]
                     diagnostics.update(_prefix_metrics(
                         "reappeared_",
@@ -1103,6 +1201,14 @@ class Self(nn.Module):
                             target_object_file_scores.to(image_t.dtype),
                         ),
                     ))
+                    if expected_query_scores is not None:
+                        diagnostics.update(_prefix_metrics(
+                            "reappeared_expected_file_",
+                            paired_feature_match_diagnostics(
+                                expected_query_scores.to(image_t.dtype),
+                                target_query_scores.to(image_t.dtype),
+                            ),
+                        ))
                     active_candidates = None
                     if "object_position_tp1" in batch:
                         active_candidates = _active_file_candidate_mask(
@@ -1153,6 +1259,18 @@ class Self(nn.Module):
                                 source_labels,
                             ),
                         ))
+                        if expected_query_scores is not None:
+                            diagnostics.update(_prefix_metrics(
+                                "reappeared_expected_file_",
+                                grouped_instance_match_diagnostics(
+                                    expected_query_scores.to(image_t.dtype),
+                                    target_query_scores.to(image_t.dtype),
+                                    source_sequences,
+                                    source_sequences,
+                                    source_labels,
+                                    source_labels,
+                                ),
+                            ))
                         if active_candidates is not None:
                             diagnostics.update(_prefix_metrics(
                                 "reappeared_active_query_file_",
@@ -1179,6 +1297,9 @@ class Self(nn.Module):
                                     else None,
                                     context.probs[reappeared_active]
                                     if self.cfg.learned_active_file_gate_context_features
+                                    else None,
+                                    expected_query_scores
+                                    if self.cfg.learned_active_file_gate_expectation_features
                                     else None,
                                 )
                                 file_valid = (
@@ -1268,6 +1389,19 @@ class Self(nn.Module):
                         "reappeared_query_file_instance_hard_same_distance": _zero_like_scalar(image_t),
                         "reappeared_query_file_instance_nearest_same_group_other_distance": _zero_like_scalar(image_t),
                         "reappeared_query_file_instance_hard_valid_fraction": _zero_like_scalar(image_t),
+                        "reappeared_expected_file_paired_feature_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_expected_file_paired_feature_match_margin": _zero_like_scalar(image_t),
+                        "reappeared_expected_file_paired_feature_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_expected_file_paired_feature_nearest_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_expected_file_instance_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_expected_file_instance_match_margin": _zero_like_scalar(image_t),
+                        "reappeared_expected_file_instance_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_expected_file_instance_nearest_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_expected_file_instance_hard_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_expected_file_instance_hard_margin": _zero_like_scalar(image_t),
+                        "reappeared_expected_file_instance_hard_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_expected_file_instance_nearest_same_group_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_expected_file_instance_hard_valid_fraction": _zero_like_scalar(image_t),
                         "reappeared_active_query_file_candidate_instance_match_accuracy": _zero_like_scalar(image_t),
                         "reappeared_active_query_file_candidate_instance_match_margin": _zero_like_scalar(image_t),
                         "reappeared_active_query_file_candidate_instance_same_distance": _zero_like_scalar(image_t),
@@ -1323,6 +1457,7 @@ class Self(nn.Module):
             + self.cfg.object_cycle_weight * losses["object_cycle_consistency"]
             + self.cfg.reappearance_file_query_weight * losses["reappearance_file_query"]
             + self.cfg.active_file_query_weight * losses["active_file_query"]
+            + self.cfg.active_file_expectation_weight * losses["active_file_expectation"]
             + self.cfg.learned_active_file_gate_weight * losses["learned_active_file_gate"]
         )
         self.memory.write(sae.eps, sae.coherence)
