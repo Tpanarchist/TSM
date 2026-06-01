@@ -59,6 +59,7 @@ def test_memory_reads_prior_visible_object_trace_in_batch_order():
     batch = {
         "sequence_id": torch.tensor([7, 7, 7], dtype=torch.long),
         "visible_t": torch.tensor([1.0, 0.0, 0.0]),
+        "object_position_t": torch.tensor([[4.0, 5.0], [5.0, 5.0], [6.0, 5.0]]),
     }
 
     read = memory.read_write_object_files(batch, feature, step=3)
@@ -68,6 +69,8 @@ def test_memory_reads_prior_visible_object_trace_in_batch_order():
     assert torch.allclose(read.feature[1], feature[0])
     assert torch.allclose(read.feature[2], feature[0])
     assert read.confidence[1].item() == 1.0
+    assert read.position_valid.tolist() == [False, True, True]
+    assert torch.allclose(read.position[1], torch.tensor([4.0, 5.0]))
 
 
 def test_definition_bank_can_project_memory_trace():

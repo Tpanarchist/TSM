@@ -43,6 +43,11 @@ class TsmConfig:
     reappearance_file_query_weight: float = 0.0
     reappearance_file_query_temperature: float = 0.25
     reappearance_file_query_hard_weight: float = 1.0
+    active_file_query_weight: float = 0.0
+    active_file_query_temperature: float = 0.25
+    active_file_candidate_radius: float = 10.0
+    active_file_candidate_max_age: float = 8.0
+    active_file_candidate_wrap: bool = False
 
 
 @dataclass

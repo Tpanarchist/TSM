@@ -47,3 +47,8 @@ model:
   reappearance_file_query_weight: 0.0
   reappearance_file_query_temperature: 0.25
   reappearance_file_query_hard_weight: 1.0
+  active_file_query_weight: 0.0
+  active_file_query_temperature: 0.25
+  active_file_candidate_radius: 10.0
+  active_file_candidate_max_age: 8.0
+  active_file_candidate_wrap: false

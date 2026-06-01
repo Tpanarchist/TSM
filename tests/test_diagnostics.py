@@ -1,6 +1,7 @@
 import torch
 
 from tsm.diagnostics import (
+    candidate_instance_match_diagnostics,
     feature_label_diagnostics,
     feature_match_diagnostics,
     grouped_instance_match_diagnostics,
@@ -134,3 +135,43 @@ def test_grouped_instance_match_diagnostics_uses_same_group_hard_negatives():
     assert metrics["instance_match_accuracy"].item() == 1.0
     assert metrics["instance_hard_match_accuracy"].item() == 1.0
     assert metrics["instance_hard_valid_fraction"].item() > 0.0
+
+
+def test_candidate_instance_match_diagnostics_limits_lookup_field():
+    source = torch.tensor(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ]
+    )
+    target = torch.tensor(
+        [
+            [0.9, 0.1],
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ]
+    )
+    source_instances = torch.tensor([10, 11])
+    target_instances = torch.tensor([12, 10, 11])
+    source_groups = torch.tensor([0, 1])
+    target_groups = torch.tensor([0, 0, 1])
+    candidate_mask = torch.tensor(
+        [
+            [False, True, False],
+            [False, False, True],
+        ]
+    )
+
+    metrics = candidate_instance_match_diagnostics(
+        source,
+        target,
+        source_instances,
+        target_instances,
+        source_groups,
+        target_groups,
+        candidate_mask,
+    )
+
+    assert metrics["candidate_instance_match_accuracy"].item() == 1.0
+    assert metrics["candidate_target_present_fraction"].item() == 1.0
+    assert metrics["candidate_mean_count"].item() == 1.0

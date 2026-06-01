@@ -27,6 +27,8 @@ class ObjectMemoryRead:
     hit: torch.Tensor
     age: torch.Tensor
     write: torch.Tensor
+    position: torch.Tensor
+    position_valid: torch.Tensor
 
 
 class Memory:
@@ -59,9 +61,11 @@ class Memory:
         hit = torch.zeros(bsz, dtype=torch.bool, device=device)
         age = torch.zeros(bsz, 1, dtype=dtype, device=device)
         write = torch.zeros(bsz, dtype=torch.bool, device=device)
+        position = torch.zeros(bsz, 2, dtype=dtype, device=device)
+        position_valid = torch.zeros(bsz, dtype=torch.bool, device=device)
 
         if "sequence_id" not in batch or "visible_t" not in batch:
-            return ObjectMemoryRead(memory_feature, confidence, hit, age, write)
+            return ObjectMemoryRead(memory_feature, confidence, hit, age, write, position, position_valid)
 
         sequence_ids = batch["sequence_id"].detach().cpu().to(torch.long)
         visible = batch["visible_t"].detach().cpu().to(torch.float32)
@@ -77,23 +81,27 @@ class Memory:
                 hit[row] = True
                 age[row] = float(object_age)
                 confidence[row] = 1.0 / (1.0 + float(object_age) / self.object_decay_steps)
+                if stored.last_position is not None:
+                    position[row, 0] = stored.last_position[0]
+                    position[row, 1] = stored.last_position[1]
+                    position_valid[row] = True
                 self.object_read_count += 1
 
             if float(visible[row].item()) > 0.5:
-                position = None
+                stored_position = None
                 if positions_cpu is not None:
-                    position = (float(positions_cpu[row, 0].item()), float(positions_cpu[row, 1].item()))
+                    stored_position = (float(positions_cpu[row, 0].item()), float(positions_cpu[row, 1].item()))
                 updates = (stored.updates + 1) if stored is not None else 1
                 self.object_files[key] = ObjectFile(
                     feature=detached_feature[row].clone(),
-                    last_position=position,
+                    last_position=stored_position,
                     last_step=step,
                     updates=updates,
                 )
                 write[row] = True
                 self.object_write_count += 1
 
-        return ObjectMemoryRead(memory_feature, confidence, hit, age, write)
+        return ObjectMemoryRead(memory_feature, confidence, hit, age, write, position, position_valid)
 
     def short_term_decay(self) -> None:
         return None

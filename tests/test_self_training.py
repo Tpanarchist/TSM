@@ -1,7 +1,7 @@
 import torch
 
 from tsm.config import TsmConfig
-from tsm.self_field import Self
+from tsm.self_field import Self, _active_file_candidate_mask
 
 
 def test_forward_train_returns_loss_dict_and_images():
@@ -39,6 +39,7 @@ def test_forward_train_returns_loss_dict_and_images():
         "reappearance_alignment",
         "object_cycle_consistency",
         "reappearance_file_query",
+        "active_file_query",
     }
     assert set(out.diagnostics) >= {
         "context_effective_count",
@@ -95,6 +96,20 @@ def test_tick_has_no_embodiment_action():
     assert out.context_probs.shape == (1, 3)
 
 
+def test_active_file_candidate_mask_supports_wrapped_positions():
+    file_positions = torch.tensor([[16.0, 5.0]])
+    query_positions = torch.tensor([[4.0, 5.0]])
+    valid = torch.tensor([True])
+    hit = torch.tensor([True])
+    age = torch.zeros(1, 1)
+
+    direct = _active_file_candidate_mask(file_positions, query_positions, valid, hit, age, 8.1, 8.0)
+    wrapped = _active_file_candidate_mask(file_positions, query_positions, valid, hit, age, 8.1, 8.0, 20.0)
+
+    assert not bool(direct[0, 0].item())
+    assert bool(wrapped[0, 0].item())
+
+
 def test_forward_train_reports_temporal_object_diagnostics():
     cfg = TsmConfig(
         d_model=32,
@@ -124,6 +139,7 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "identity_preserved": torch.ones(5),
         "unexpected_disappearance": torch.tensor([0, 0, 1, 0, 0], dtype=torch.float32),
         "object_position_t": torch.zeros(5, 2),
+        "object_position_tp1": torch.zeros(5, 2),
     }
 
     out = model.forward_train(batch)
@@ -167,6 +183,9 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_query_file_paired_feature_match_accuracy",
         "reappeared_query_file_instance_match_accuracy",
         "reappeared_query_file_instance_hard_match_accuracy",
+        "reappeared_active_query_file_candidate_instance_match_accuracy",
+        "reappeared_active_query_file_candidate_instance_hard_match_accuracy",
+        "reappeared_active_query_file_candidate_mean_count",
     }
     assert torch.allclose(out.diagnostics["temporal_visible_fraction"], torch.tensor(0.6), atol=1e-6)
     assert torch.allclose(out.diagnostics["temporal_occluded_fraction"], torch.tensor(0.4), atol=1e-6)
