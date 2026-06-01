@@ -36,6 +36,7 @@ def test_forward_train_returns_loss_dict_and_images():
         "context_balance",
         "ternary_activation_l1",
         "bit_cost",
+        "reappearance_alignment",
     }
     assert set(out.diagnostics) >= {
         "context_effective_count",
@@ -152,6 +153,9 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_feature_match_accuracy",
         "reappeared_base_feature_match_accuracy",
         "reappeared_memory_definition_match_delta",
+        "reappeared_paired_feature_match_accuracy",
+        "reappeared_base_paired_feature_match_accuracy",
+        "reappeared_paired_memory_definition_match_delta",
     }
     assert torch.allclose(out.diagnostics["temporal_visible_fraction"], torch.tensor(0.6), atol=1e-6)
     assert torch.allclose(out.diagnostics["temporal_occluded_fraction"], torch.tensor(0.4), atol=1e-6)

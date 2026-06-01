@@ -34,6 +34,8 @@ class TsmConfig:
     use_memory_conditioning: bool = True
     memory_condition_scale: float = 0.2
     memory_definition_scale: float = 0.75
+    reappearance_alignment_weight: float = 0.0
+    reappearance_alignment_temperature: float = 0.25
 
 
 @dataclass

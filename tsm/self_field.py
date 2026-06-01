@@ -6,7 +6,12 @@ import torch.nn.functional as F
 
 from .config import TsmConfig
 from .context import ContextRouter, context_balance_loss, context_entropy
-from .diagnostics import feature_label_diagnostics, feature_match_diagnostics, ternary_label_diagnostics
+from .diagnostics import (
+    feature_label_diagnostics,
+    feature_match_diagnostics,
+    paired_feature_match_diagnostics,
+    ternary_label_diagnostics,
+)
 from .definitions import DefinitionBank
 from .develop import DevelopmentalScheduler
 from .drives import DriveDynamics
@@ -90,6 +95,17 @@ def _zero_like_scalar(reference: torch.Tensor) -> torch.Tensor:
     return torch.zeros((), dtype=reference.dtype, device=reference.device)
 
 
+def _paired_contrastive_loss(source: torch.Tensor, target: torch.Tensor, temperature: float) -> torch.Tensor:
+    if source.shape[0] < 2 or target.shape[0] < 2:
+        return _zero_like_scalar(source)
+    pair_count = min(source.shape[0], target.shape[0])
+    source = F.normalize(source[:pair_count], dim=-1, eps=1e-6)
+    target = F.normalize(target[:pair_count].detach().to(device=source.device, dtype=source.dtype), dim=-1, eps=1e-6)
+    logits = torch.matmul(source, target.t()) / max(temperature, 1e-6)
+    labels = torch.arange(pair_count, device=source.device)
+    return F.cross_entropy(logits, labels)
+
+
 class Self(nn.Module):
     def __init__(self, cfg: TsmConfig | None = None) -> None:
         super().__init__()
@@ -144,6 +160,44 @@ class Self(nn.Module):
             context.probs,
         )
         return self.defs.project(sae.eps, context.probs)
+
+    @torch.no_grad()
+    def _diagnostic_definition_scores_for_image(
+        self,
+        image: torch.Tensor,
+        dataset_id: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        perception = self.perception(image, dataset_id=dataset_id)
+        batch_size = image.shape[0]
+        initial_q = self.mind.initial(batch_size, image.device)
+        context = self.contexts(initial_q, perception.latents)
+        expected0 = self.reality.predict_latents(initial_q, context.embedding)
+        drives = DriveState.zeros(batch_size, image.device)
+        attach_power = torch.zeros_like(perception.latents)
+        sae0 = self.sae(
+            perception.latents,
+            expected0,
+            perception.meta.source_confidence,
+            attach_power,
+            drives,
+            context.probs,
+        )
+        q, _delta_q = self.mind.infer(
+            perception.latents,
+            sae0.eps,
+            context.embedding,
+            steps=self.cfg.inference_steps,
+        )
+        expected = self.reality.predict_latents(q, context.embedding)
+        sae = self.sae(
+            perception.latents,
+            expected,
+            perception.meta.source_confidence,
+            attach_power,
+            drives,
+            context.probs,
+        )
+        return self.defs.raw_scores(sae.eps, context.probs)
 
     def forward_train(self, batch: dict[str, torch.Tensor], include_label_diagnostics: bool = True) -> TrainOutput:
         image_t = batch["image_t"]
@@ -206,6 +260,28 @@ class Self(nn.Module):
             memory_feature,
             memory_prediction_confidence,
         )
+        reappearance_alignment = _zero_like_scalar(image_t)
+        if self.cfg.reappearance_alignment_weight > 0.0 and "visible_tp1" in batch and "occluded_t" in batch:
+            visible_tp1_for_alignment = batch["visible_tp1"].to(device=image_t.device, dtype=image_t.dtype)
+            occluded_t_for_alignment = batch["occluded_t"].to(device=image_t.device, dtype=image_t.dtype)
+            reappeared_for_alignment = (occluded_t_for_alignment > 0.5) & (visible_tp1_for_alignment > 0.5)
+            if bool(reappeared_for_alignment.any().item()):
+                target_dataset_id = dataset_id[reappeared_for_alignment] if dataset_id is not None else None
+                source_scores = self.defs.raw_scores(
+                    sae.eps,
+                    context.probs,
+                    memory_feature,
+                    memory_definition_confidence,
+                )
+                target_scores = self._diagnostic_definition_scores_for_image(
+                    image_tp1[reappeared_for_alignment],
+                    dataset_id=target_dataset_id,
+                )
+                reappearance_alignment = _paired_contrastive_loss(
+                    source_scores[reappeared_for_alignment],
+                    target_scores,
+                    self.cfg.reappearance_alignment_temperature,
+                )
         prior = self.reality.context_prior(context.probs)
         free_energy = variational_free_energy(sae.raw, sae.precision, q, prior)
         ternary_nonzero = ternary.ne(0)
@@ -228,6 +304,7 @@ class Self(nn.Module):
             "context_balance": context_balance_value,
             "ternary_activation_l1": ternary.abs().mean(),
             "bit_cost": self.defs.bit_cost(),
+            "reappearance_alignment": reappearance_alignment,
         }
         diagnostics = {
             "context_max_probability": context.probs.max(dim=-1).values.mean(),
@@ -560,9 +637,27 @@ class Self(nn.Module):
                             source_labels,
                         ),
                     ))
+                    diagnostics.update(_prefix_metrics(
+                        "reappeared_",
+                        paired_feature_match_diagnostics(
+                            ternary[reappeared_active].sign().to(image_t.dtype),
+                            target_ternary.sign().to(image_t.dtype),
+                        ),
+                    ))
+                    diagnostics.update(_prefix_metrics(
+                        "reappeared_base_",
+                        paired_feature_match_diagnostics(
+                            ternary_base[reappeared_active].sign().to(image_t.dtype),
+                            target_ternary.sign().to(image_t.dtype),
+                        ),
+                    ))
                     diagnostics["reappeared_memory_definition_match_delta"] = (
                         diagnostics["reappeared_feature_match_accuracy"]
                         - diagnostics["reappeared_base_feature_match_accuracy"]
+                    )
+                    diagnostics["reappeared_paired_memory_definition_match_delta"] = (
+                        diagnostics["reappeared_paired_feature_match_accuracy"]
+                        - diagnostics["reappeared_base_paired_feature_match_accuracy"]
                     )
                 elif include_label_diagnostics:
                     diagnostics.update({
@@ -570,11 +665,20 @@ class Self(nn.Module):
                         "reappeared_feature_match_margin": _zero_like_scalar(image_t),
                         "reappeared_feature_same_distance": _zero_like_scalar(image_t),
                         "reappeared_feature_nearest_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_paired_feature_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_paired_feature_match_margin": _zero_like_scalar(image_t),
+                        "reappeared_paired_feature_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_paired_feature_nearest_other_distance": _zero_like_scalar(image_t),
                         "reappeared_base_feature_match_accuracy": _zero_like_scalar(image_t),
                         "reappeared_base_feature_match_margin": _zero_like_scalar(image_t),
                         "reappeared_base_feature_same_distance": _zero_like_scalar(image_t),
                         "reappeared_base_feature_nearest_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_base_paired_feature_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_base_paired_feature_match_margin": _zero_like_scalar(image_t),
+                        "reappeared_base_paired_feature_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_base_paired_feature_nearest_other_distance": _zero_like_scalar(image_t),
                         "reappeared_memory_definition_match_delta": _zero_like_scalar(image_t),
+                        "reappeared_paired_memory_definition_match_delta": _zero_like_scalar(image_t),
                     })
         total = (
             self.cfg.recon_weight * losses["reconstruction"]
@@ -585,6 +689,7 @@ class Self(nn.Module):
             + self.cfg.context_balance_weight * losses["context_balance"]
             + self.cfg.ternary_activation_weight * losses["ternary_activation_l1"]
             + self.cfg.bit_cost_weight * losses["bit_cost"]
+            + self.cfg.reappearance_alignment_weight * losses["reappearance_alignment"]
         )
         self.memory.write(sae.eps, sae.coherence)
         for candidate in self.evidence.accumulate(delta_q, sae.coherence):

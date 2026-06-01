@@ -53,6 +53,18 @@ class DefinitionBank(nn.Module):
         memory_feature: torch.Tensor | None = None,
         memory_confidence: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        raw = self.raw_scores(eps, ctx_probs, memory_feature, memory_confidence)
+        tau = torch.einsum("bk,kj->bj", ctx_probs, self.log_tau.exp())
+        alpha = torch.einsum("bk,kj->bj", ctx_probs, self.log_alpha.exp())
+        return TernaryProject.apply(raw, tau, alpha)
+
+    def raw_scores(
+        self,
+        eps: torch.Tensor,
+        ctx_probs: torch.Tensor,
+        memory_feature: torch.Tensor | None = None,
+        memory_confidence: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         pooled = eps.mean(dim=1)
         axes = F.normalize(self.axes, dim=-1)
         per_ctx = torch.einsum("bd,kjd->bkj", pooled, axes)
@@ -68,9 +80,7 @@ class DefinitionBank(nn.Module):
             memory_per_ctx = torch.einsum("bd,kjd->bkj", memory_feature, memory_axes)
             memory_raw = torch.einsum("bk,bkj->bj", ctx_probs, memory_per_ctx)
             raw = raw + self.cfg.memory_definition_scale * confidence.clamp(0.0, 1.0) * memory_raw
-        tau = torch.einsum("bk,kj->bj", ctx_probs, self.log_tau.exp())
-        alpha = torch.einsum("bk,kj->bj", ctx_probs, self.log_alpha.exp())
-        return TernaryProject.apply(raw, tau, alpha)
+        return raw
 
     def bit_cost(self) -> torch.Tensor:
         tau_cost = self.log_tau.exp().reciprocal().mean()

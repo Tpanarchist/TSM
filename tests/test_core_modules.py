@@ -93,6 +93,9 @@ def test_definition_bank_can_project_memory_trace():
 
     base = bank.project(eps, ctx)
     conditioned = bank.project(eps, ctx, memory_feature, memory_confidence)
+    raw = bank.raw_scores(eps, ctx, memory_feature, memory_confidence)
 
     assert base[0, 0].item() == 0.0
     assert conditioned[0, 0].item() > 0.0
+    assert raw.shape == conditioned.shape
+    assert raw[0, 0].item() > 0.0

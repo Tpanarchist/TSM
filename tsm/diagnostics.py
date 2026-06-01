@@ -225,6 +225,46 @@ def feature_match_diagnostics(
     }
 
 
+def paired_feature_match_diagnostics(
+    source_features: torch.Tensor,
+    target_features: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    dtype = source_features.dtype
+    device = source_features.device
+    if source_features.numel() == 0 or target_features.numel() == 0:
+        zero = _zero(dtype, device)
+        return {
+            "paired_feature_match_accuracy": zero,
+            "paired_feature_match_margin": zero,
+            "paired_feature_same_distance": zero,
+            "paired_feature_nearest_other_distance": zero,
+        }
+    pair_count = min(source_features.shape[0], target_features.shape[0])
+    if pair_count < 2:
+        zero = _zero(dtype, device)
+        return {
+            "paired_feature_match_accuracy": zero,
+            "paired_feature_match_margin": zero,
+            "paired_feature_same_distance": zero,
+            "paired_feature_nearest_other_distance": zero,
+        }
+    source = source_features.detach()[:pair_count].to(dtype)
+    target = target_features.detach()[:pair_count].to(device=device, dtype=dtype)
+    distances = (source.unsqueeze(1) - target.unsqueeze(0)).square().mean(dim=-1)
+    nearest = distances.argmin(dim=1)
+    labels = torch.arange(pair_count, device=device)
+    accuracy = (nearest == labels).to(dtype).mean()
+    same_distance = distances[labels, labels].mean()
+    other_mask = ~torch.eye(pair_count, dtype=torch.bool, device=device)
+    other_distance = distances.masked_fill(~other_mask, float("inf")).min(dim=1).values.mean()
+    return {
+        "paired_feature_match_accuracy": accuracy,
+        "paired_feature_match_margin": other_distance - same_distance,
+        "paired_feature_same_distance": same_distance,
+        "paired_feature_nearest_other_distance": other_distance,
+    }
+
+
 def ternary_axis_specialization(
     ternary: torch.Tensor,
     labels: torch.Tensor,

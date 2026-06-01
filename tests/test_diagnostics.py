@@ -3,6 +3,7 @@ import torch
 from tsm.diagnostics import (
     feature_label_diagnostics,
     feature_match_diagnostics,
+    paired_feature_match_diagnostics,
     ternary_axis_specialization,
     ternary_label_diagnostics,
 )
@@ -87,3 +88,23 @@ def test_feature_match_diagnostics_scores_source_target_identity():
 
     assert metrics["feature_match_accuracy"].item() == 1.0
     assert metrics["feature_match_margin"].item() > 0.0
+
+
+def test_paired_feature_match_diagnostics_scores_exact_pairs():
+    source = torch.tensor(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ]
+    )
+    target = torch.tensor(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ]
+    )
+
+    metrics = paired_feature_match_diagnostics(source, target)
+
+    assert metrics["paired_feature_match_accuracy"].item() == 1.0
+    assert metrics["paired_feature_match_margin"].item() > 0.0
