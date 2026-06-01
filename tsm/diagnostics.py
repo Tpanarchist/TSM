@@ -141,6 +141,37 @@ def ternary_label_diagnostics(
     return metrics
 
 
+def feature_label_diagnostics(features: torch.Tensor, labels: torch.Tensor) -> dict[str, torch.Tensor]:
+    dtype = features.dtype
+    device = features.device
+    labels = labels.to(device=device, dtype=torch.long)
+    valid = labels >= 0
+    if features.numel() == 0 or not bool(valid.any().item()):
+        zero = _zero(dtype, device)
+        return {
+            "feature_probe_accuracy": zero,
+            "feature_centroid_separation": zero,
+            "feature_label_count": zero,
+        }
+    features = features.detach()[valid]
+    labels = labels[valid]
+    unique_labels = labels.unique(sorted=True)
+    if unique_labels.numel() < 2:
+        zero = _zero(dtype, device)
+        return {
+            "feature_probe_accuracy": zero,
+            "feature_centroid_separation": zero,
+            "feature_label_count": torch.tensor(float(unique_labels.numel()), dtype=dtype, device=device),
+        }
+    centroids = torch.stack([features[labels == label].mean(dim=0) for label in unique_labels])
+    distances = torch.pdist(centroids, p=2)
+    return {
+        "feature_probe_accuracy": _nearest_centroid_probe(features.to(dtype), labels, dtype),
+        "feature_centroid_separation": distances.mean() if distances.numel() else _zero(dtype, device),
+        "feature_label_count": torch.tensor(float(unique_labels.numel()), dtype=dtype, device=device),
+    }
+
+
 def ternary_axis_specialization(
     ternary: torch.Tensor,
     labels: torch.Tensor,

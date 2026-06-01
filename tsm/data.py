@@ -305,6 +305,7 @@ class TemporalObjectPermanenceDataset(Dataset):
     """Temporal stream for object permanence before any embodied/game adapter."""
 
     phase_count = 5
+    sequential = True
 
     def __init__(
         self,

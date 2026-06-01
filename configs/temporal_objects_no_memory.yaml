@@ -1,4 +1,4 @@
-run_name: temporal_objects_no_ternary
+run_name: temporal_objects_no_memory
 batch_size: 64
 max_steps: 300
 learning_rate: 0.0008
@@ -33,7 +33,7 @@ model:
   context_balance_weight: 0.02
   ternary_activation_weight: 0.001
   bit_cost_weight: 0.0005
-  use_ternary_conditioning: false
+  use_ternary_conditioning: true
   ternary_condition_scale: 0.25
-  use_memory_conditioning: true
+  use_memory_conditioning: false
   memory_condition_scale: 0.2

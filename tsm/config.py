@@ -31,6 +31,8 @@ class TsmConfig:
     bit_cost_weight: float = 0.001
     use_ternary_conditioning: bool = True
     ternary_condition_scale: float = 0.25
+    use_memory_conditioning: bool = True
+    memory_condition_scale: float = 0.2
 
 
 @dataclass

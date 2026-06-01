@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 from .config import TsmConfig
 from .context import ContextRouter, context_balance_loss, context_entropy
-from .diagnostics import ternary_label_diagnostics
+from .diagnostics import feature_label_diagnostics, ternary_label_diagnostics
 from .definitions import DefinitionBank
 from .develop import DevelopmentalScheduler
 from .drives import DriveDynamics
@@ -140,8 +140,27 @@ class Self(nn.Module):
         )
         ternary = self.defs.project(sae.eps, context.probs)
         ternary_condition = ternary if self.cfg.use_ternary_conditioning else None
+        memory_read = self.memory.read_write_object_files(
+            batch,
+            perception.latents.mean(dim=1),
+            step=len(self.memory.records),
+        )
+        memory_feature = memory_read.feature
+        memory_confidence = memory_read.confidence
+        memory_prediction_confidence = memory_confidence
+        if "occluded_t" in batch:
+            occluded_gate = batch["occluded_t"].to(device=image_t.device, dtype=image_t.dtype).unsqueeze(-1)
+            memory_prediction_confidence = memory_prediction_confidence * occluded_gate
+        if not self.cfg.use_memory_conditioning:
+            memory_prediction_confidence = torch.zeros_like(memory_prediction_confidence)
         recon = self.reality.reconstruct_image(q, ternary_condition)
-        next_image = self.reality.predict_next_image(q, context.embedding, ternary_condition)
+        next_image = self.reality.predict_next_image(
+            q,
+            context.embedding,
+            ternary_condition,
+            memory_feature,
+            memory_prediction_confidence,
+        )
         prior = self.reality.context_prior(context.probs)
         free_energy = variational_free_energy(sae.raw, sae.precision, q, prior)
         ternary_nonzero = ternary.ne(0)
@@ -174,6 +193,30 @@ class Self(nn.Module):
             "ternary_condition_norm": (
                 self.reality.condition_latents(q, ternary_condition) - q
             ).detach().norm(dim=-1).mean(),
+            "memory_condition_norm": (
+                self.reality.condition_latents(q, ternary_condition, memory_feature, memory_prediction_confidence)
+                - self.reality.condition_latents(q, ternary_condition)
+            ).detach().norm(dim=-1).mean(),
+            "memory_object_file_count": torch.tensor(
+                len(self.memory.object_files),
+                dtype=image_t.dtype,
+                device=image_t.device,
+            ),
+            "memory_object_read_count": torch.tensor(
+                self.memory.object_read_count,
+                dtype=image_t.dtype,
+                device=image_t.device,
+            ),
+            "memory_object_write_count": torch.tensor(
+                self.memory.object_write_count,
+                dtype=image_t.dtype,
+                device=image_t.device,
+            ),
+            "memory_object_hit_fraction": memory_read.hit.to(image_t.dtype).mean(),
+            "memory_object_write_fraction": memory_read.write.to(image_t.dtype).mean(),
+            "memory_object_confidence_mean": memory_confidence.mean(),
+            "memory_object_prediction_confidence_mean": memory_prediction_confidence.mean(),
+            "memory_object_age_mean": memory_read.age.mean(),
             "sae_severity_mean": sae.severity.mean(),
             "sae_coherence_mean": sae.coherence.mean(),
             "gate_accept_count": torch.tensor(
@@ -245,6 +288,12 @@ class Self(nn.Module):
                     "object_",
                     ternary_label_diagnostics(ternary, object_id, context_hard),
                 ))
+                active_memory = memory_read.hit.to(device=image_t.device)
+                if bool(active_memory.any().item()):
+                    diagnostics.update(_prefix_metrics(
+                        "memory_object_",
+                        feature_label_diagnostics(memory_feature[active_memory], object_id[active_memory]),
+                    ))
         if "visible_t" in batch and "occluded_t" in batch:
             visible_t = batch["visible_t"].to(device=image_t.device, dtype=image_t.dtype)
             occluded_t = batch["occluded_t"].to(device=image_t.device, dtype=image_t.dtype)
@@ -283,6 +332,21 @@ class Self(nn.Module):
                     context_hard,
                     occluded_mask,
                     self.cfg.contexts,
+                    image_t.dtype,
+                ),
+                "temporal_memory_visible_hit_fraction": _masked_mean(
+                    memory_read.hit.to(image_t.dtype),
+                    visible_mask,
+                    image_t.dtype,
+                ),
+                "temporal_memory_occluded_hit_fraction": _masked_mean(
+                    memory_read.hit.to(image_t.dtype),
+                    occluded_mask,
+                    image_t.dtype,
+                ),
+                "temporal_memory_occluded_confidence_mean": _masked_mean(
+                    memory_prediction_confidence.squeeze(-1),
+                    occluded_mask,
                     image_t.dtype,
                 ),
                 "temporal_sae_visible_mean": _masked_mean(severity_per_sample, visible_mask, image_t.dtype),
@@ -338,6 +402,20 @@ class Self(nn.Module):
             diagnostics["temporal_prediction_occlusion_delta"] = (
                 diagnostics["temporal_prediction_occluded_mean"] - diagnostics["temporal_prediction_visible_mean"]
             )
+            with torch.no_grad():
+                next_without_memory = self.reality.predict_next_image(q, context.embedding, ternary_condition)
+                no_memory_error = (next_without_memory - image_tp1).square().flatten(1).mean(dim=1)
+                memory_impact = no_memory_error - prediction_error_per_sample.detach()
+            diagnostics.update({
+                "memory_prediction_impact_mean": memory_impact.mean(),
+                "memory_prediction_occluded_impact_mean": _masked_mean(memory_impact, occluded_mask, image_t.dtype),
+                "memory_prediction_reappeared_impact_mean": _masked_mean(memory_impact, reappeared, image_t.dtype),
+                "memory_prediction_disappearance_impact_mean": _masked_mean(
+                    memory_impact,
+                    disappearance_mask,
+                    image_t.dtype,
+                ),
+            })
             if include_label_diagnostics and "object_id" in batch and bool(occluded_mask.any().item()):
                 object_id = batch["object_id"].to(device=image_t.device, dtype=torch.long)
                 diagnostics.update(_prefix_metrics(
@@ -348,6 +426,12 @@ class Self(nn.Module):
                         context_hard[occluded_mask],
                     ),
                 ))
+                occluded_active = occluded_mask & memory_read.hit.to(device=image_t.device)
+                if bool(occluded_active.any().item()):
+                    diagnostics.update(_prefix_metrics(
+                        "occluded_memory_object_",
+                        feature_label_diagnostics(memory_feature[occluded_active], object_id[occluded_active]),
+                    ))
         total = (
             self.cfg.recon_weight * losses["reconstruction"]
             + self.cfg.pred_weight * losses["prediction"]
@@ -372,6 +456,8 @@ class Self(nn.Module):
             sae=sae,
             ternary=ternary,
             latent_state=q,
+            memory_feature=memory_feature,
+            memory_confidence=memory_prediction_confidence,
         )
 
     @torch.no_grad()
@@ -387,7 +473,13 @@ class Self(nn.Module):
         for axis in range(axis_count):
             ablated = ternary.clone()
             ablated[:, axis] = 0
-            prediction = self.reality.predict_next_image(latent, context_embedding, ablated)
+            prediction = self.reality.predict_next_image(
+                latent,
+                context_embedding,
+                ablated,
+                output.memory_feature,
+                output.memory_confidence,
+            )
             ablated_error = (prediction - image_tp1).square().flatten(1).mean(dim=1)
             impacts.append((ablated_error - base_error).clamp_min(0.0).mean())
         return torch.stack(impacts) if impacts else torch.zeros(0, dtype=output.ternary.dtype, device=output.ternary.device)

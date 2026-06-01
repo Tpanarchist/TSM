@@ -58,6 +58,7 @@ def test_temporal_object_dataset_exposes_occlusion_phases():
     assert ds[4]["identity_preserved"].item() == 1.0
     assert ds[0]["image_t"].shape == (1, 28, 28)
     assert ds[0]["object_position_t"].shape == (2,)
+    assert ds.sequential
 
 
 def test_make_dataset_supports_temporal_object_alias():

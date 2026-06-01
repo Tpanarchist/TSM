@@ -109,6 +109,7 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "image_t": torch.rand(5, 1, 16, 16),
         "image_tp1": torch.rand(5, 1, 16, 16),
         "dataset_id": torch.zeros(5, dtype=torch.long),
+        "sequence_id": torch.zeros(5, dtype=torch.long),
         "mode": torch.tensor([0, 1, 2, 2, 3], dtype=torch.long),
         "phase": torch.tensor([0, 1, 2, 3, 4], dtype=torch.long),
         "object_id": torch.tensor([0, 1, 2, 3, 0], dtype=torch.long),
@@ -119,6 +120,7 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "moved": torch.tensor([0, 1, 0, 0, 0], dtype=torch.float32),
         "identity_preserved": torch.ones(5),
         "unexpected_disappearance": torch.tensor([0, 0, 1, 0, 0], dtype=torch.float32),
+        "object_position_t": torch.zeros(5, 2),
     }
 
     out = model.forward_train(batch)
@@ -135,6 +137,11 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "temporal_prediction_visible_mean",
         "temporal_context_occluded_used_count",
         "temporal_context_visible_used_count",
+        "temporal_memory_occluded_hit_fraction",
+        "memory_condition_norm",
+        "memory_prediction_occluded_impact_mean",
+        "memory_object_feature_probe_accuracy",
+        "occluded_memory_object_feature_probe_accuracy",
     }
     assert torch.allclose(out.diagnostics["temporal_visible_fraction"], torch.tensor(0.6), atol=1e-6)
     assert torch.allclose(out.diagnostics["temporal_occluded_fraction"], torch.tensor(0.4), atol=1e-6)

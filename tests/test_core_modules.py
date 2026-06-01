@@ -3,6 +3,7 @@ import torch
 from tsm.config import TsmConfig
 from tsm.context import ContextRouter
 from tsm.gate import MutationGate
+from tsm.memory import Memory
 from tsm.sae import SAE
 from tsm.types import CandidateTruth, DriveState
 
@@ -45,3 +46,24 @@ def test_gate_rejects_and_accepts_candidates():
     assert rejected.reason == "insufficient evidence"
     assert accepted.accepted
     assert accepted.reason == "accepted"
+
+
+def test_memory_reads_prior_visible_object_trace_in_batch_order():
+    memory = Memory()
+    feature = torch.tensor([
+        [1.0, 0.0, 0.0],
+        [0.5, 0.5, 0.0],
+        [0.0, 1.0, 0.0],
+    ])
+    batch = {
+        "sequence_id": torch.tensor([7, 7, 7], dtype=torch.long),
+        "visible_t": torch.tensor([1.0, 0.0, 0.0]),
+    }
+
+    read = memory.read_write_object_files(batch, feature, step=3)
+
+    assert read.write.tolist() == [True, False, False]
+    assert read.hit.tolist() == [False, True, True]
+    assert torch.allclose(read.feature[1], feature[0])
+    assert torch.allclose(read.feature[2], feature[0])
+    assert read.confidence[1].item() == 1.0

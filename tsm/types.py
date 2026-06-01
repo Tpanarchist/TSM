@@ -103,6 +103,8 @@ class TrainOutput:
     sae: SaeOutput
     ternary: torch.Tensor
     latent_state: torch.Tensor
+    memory_feature: torch.Tensor | None = None
+    memory_confidence: torch.Tensor | None = None
 
 
 @dataclass

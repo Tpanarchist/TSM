@@ -126,7 +126,8 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
     run_dir = make_run_dir(cfg)
     cfg.write_yaml(run_dir / "config.yaml")
     dataset = make_dataset(cfg.dataset, cfg.model)
-    loader = DataLoader(dataset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers)
+    shuffle = not bool(getattr(dataset, "sequential", False))
+    loader = DataLoader(dataset, batch_size=cfg.batch_size, shuffle=shuffle, num_workers=cfg.num_workers)
     model = Self(cfg.model).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
     definition_tracker = (
@@ -241,6 +242,10 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                 handle.write(f"- final_temporal_prediction_reappeared_mean: {last_metrics['temporal_prediction_reappeared_mean']:.6f}\n")
                 handle.write(f"- final_temporal_context_visible_used_count: {last_metrics['temporal_context_visible_used_count']:.1f}\n")
                 handle.write(f"- final_temporal_context_occluded_used_count: {last_metrics['temporal_context_occluded_used_count']:.1f}\n")
+                handle.write(f"- final_temporal_memory_occluded_hit_fraction: {last_metrics['temporal_memory_occluded_hit_fraction']:.3f}\n")
+                handle.write(f"- final_temporal_memory_occluded_confidence_mean: {last_metrics['temporal_memory_occluded_confidence_mean']:.3f}\n")
+                handle.write(f"- final_memory_prediction_occluded_impact_mean: {last_metrics['memory_prediction_occluded_impact_mean']:.6f}\n")
+                handle.write(f"- final_memory_condition_norm: {last_metrics['memory_condition_norm']:.6f}\n")
             if "phase_ternary_mode_probe_accuracy" in last_metrics:
                 handle.write(f"- final_phase_ternary_probe_accuracy: {last_metrics['phase_ternary_mode_probe_accuracy']:.3f}\n")
                 handle.write(f"- final_phase_ternary_mode_mutual_information: {last_metrics['phase_ternary_mode_mutual_information']:.3f}\n")
@@ -249,9 +254,15 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                 handle.write(f"- final_object_ternary_probe_accuracy: {last_metrics['object_ternary_mode_probe_accuracy']:.3f}\n")
                 handle.write(f"- final_object_ternary_mode_mutual_information: {last_metrics['object_ternary_mode_mutual_information']:.3f}\n")
                 handle.write(f"- final_object_context_consistency: {last_metrics['object_mode_context_consistency']:.3f}\n")
+            if "memory_object_feature_probe_accuracy" in last_metrics:
+                handle.write(f"- final_memory_object_probe_accuracy: {last_metrics['memory_object_feature_probe_accuracy']:.3f}\n")
+                handle.write(f"- final_memory_object_centroid_separation: {last_metrics['memory_object_feature_centroid_separation']:.3f}\n")
             if "occluded_object_ternary_mode_probe_accuracy" in last_metrics:
                 handle.write(f"- final_occluded_object_ternary_probe_accuracy: {last_metrics['occluded_object_ternary_mode_probe_accuracy']:.3f}\n")
                 handle.write(f"- final_occluded_object_ternary_mode_mutual_information: {last_metrics['occluded_object_ternary_mode_mutual_information']:.3f}\n")
+            if "occluded_memory_object_feature_probe_accuracy" in last_metrics:
+                handle.write(f"- final_occluded_memory_object_probe_accuracy: {last_metrics['occluded_memory_object_feature_probe_accuracy']:.3f}\n")
+                handle.write(f"- final_occluded_memory_object_centroid_separation: {last_metrics['occluded_memory_object_feature_centroid_separation']:.3f}\n")
             if "definition_hardened_count" in last_metrics:
                 handle.write(f"- final_definition_candidate_count: {last_metrics['definition_candidate_count']:.1f}\n")
                 handle.write(f"- final_definition_hardened_count: {last_metrics['definition_hardened_count']:.1f}\n")

@@ -54,22 +54,42 @@ class Reality(nn.Module):
         ctx = ctx_embedding.unsqueeze(1).expand(-1, q.shape[1], -1)
         return self.predictor(torch.cat([q, ctx], dim=-1))
 
-    def condition_latents(self, q: torch.Tensor, ternary: torch.Tensor | None = None) -> torch.Tensor:
+    def condition_latents(
+        self,
+        q: torch.Tensor,
+        ternary: torch.Tensor | None = None,
+        memory_feature: torch.Tensor | None = None,
+        memory_confidence: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        out = q
         if ternary is None or not self.cfg.use_ternary_conditioning:
-            return q
-        gamma_raw, beta_raw = self.definition_conditioner(ternary).chunk(2, dim=-1)
-        scale = self.cfg.ternary_condition_scale
-        gamma = 1.0 + scale * torch.tanh(gamma_raw).unsqueeze(1)
-        beta = scale * torch.tanh(beta_raw).unsqueeze(1)
-        return q * gamma + beta
+            pass
+        else:
+            gamma_raw, beta_raw = self.definition_conditioner(ternary).chunk(2, dim=-1)
+            scale = self.cfg.ternary_condition_scale
+            gamma = 1.0 + scale * torch.tanh(gamma_raw).unsqueeze(1)
+            beta = scale * torch.tanh(beta_raw).unsqueeze(1)
+            out = out * gamma + beta
+        if memory_feature is not None and self.cfg.use_memory_conditioning:
+            confidence = memory_confidence if memory_confidence is not None else torch.ones(
+                memory_feature.shape[0],
+                1,
+                dtype=memory_feature.dtype,
+                device=memory_feature.device,
+            )
+            memory_delta = self.cfg.memory_condition_scale * torch.tanh(memory_feature).unsqueeze(1)
+            out = out + confidence.unsqueeze(1).clamp(0.0, 1.0) * memory_delta
+        return out
 
     def transition_latents(
         self,
         q: torch.Tensor,
         ctx_embedding: torch.Tensor,
         ternary: torch.Tensor | None = None,
+        memory_feature: torch.Tensor | None = None,
+        memory_confidence: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        conditioned_q = self.condition_latents(q, ternary)
+        conditioned_q = self.condition_latents(q, ternary, memory_feature, memory_confidence)
         ctx = ctx_embedding.unsqueeze(1).expand(-1, q.shape[1], -1)
         return q + self.transition(torch.cat([conditioned_q, ctx], dim=-1))
 
@@ -96,5 +116,7 @@ class Reality(nn.Module):
         q: torch.Tensor,
         ctx_embedding: torch.Tensor,
         ternary: torch.Tensor | None = None,
+        memory_feature: torch.Tensor | None = None,
+        memory_confidence: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        return self.decode_image(self.transition_latents(q, ctx_embedding, ternary))
+        return self.decode_image(self.transition_latents(q, ctx_embedding, ternary, memory_feature, memory_confidence))

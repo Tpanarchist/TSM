@@ -35,3 +35,5 @@ model:
   bit_cost_weight: 0.0005
   use_ternary_conditioning: true
   ternary_condition_scale: 0.25
+  use_memory_conditioning: true
+  memory_condition_scale: 0.2
