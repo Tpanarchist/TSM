@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+@dataclass
+class TsmConfig:
+    d_model: int = 256
+    workspace_latents: int = 64
+    hierarchy_depth: int = 2
+    contexts: int = 8
+    definitions_per_context: int = 16
+    image_channels: int = 1
+    image_size: int = 28
+    patch_size: int = 4
+    attention_heads: int = 4
+    inference_steps: int = 2
+    dropout: float = 0.0
+    apathy_floor: float = 0.02
+    recon_weight: float = 1.0
+    pred_weight: float = 1.0
+    free_energy_weight: float = 0.05
+    complexity_weight: float = 0.01
+    context_entropy_weight: float = 0.001
+    context_balance_weight: float = 0.01
+    ternary_activation_weight: float = 0.001
+    bit_cost_weight: float = 0.001
+    use_ternary_conditioning: bool = True
+    ternary_condition_scale: float = 0.25
+
+
+@dataclass
+class DatasetConfig:
+    name: str = "mnist"
+    split: str = "train"
+    cache_dir: str = "data/hf"
+    limit: int | None = None
+    seed: int = 17
+
+
+@dataclass
+class TrainConfig:
+    run_name: str = "tsm_run"
+    model: TsmConfig = field(default_factory=TsmConfig)
+    dataset: DatasetConfig = field(default_factory=DatasetConfig)
+    batch_size: int = 64
+    max_steps: int = 500
+    learning_rate: float = 3e-4
+    weight_decay: float = 1e-4
+    num_workers: int = 0
+    log_interval: int = 10
+    checkpoint_interval: int = 100
+    sample_interval: int = 100
+    grad_clip: float = 1.0
+    runs_dir: str = "runs"
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "TrainConfig":
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle) or {}
+        return cls.from_dict(raw)
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "TrainConfig":
+        raw = dict(raw)
+        model_raw = raw.pop("model", {})
+        if "ternary_sparsity_weight" in model_raw and "ternary_activation_weight" not in model_raw:
+            model_raw["ternary_activation_weight"] = model_raw.pop("ternary_sparsity_weight")
+        model = TsmConfig(**model_raw)
+        dataset = DatasetConfig(**raw.pop("dataset", {}))
+        return cls(model=model, dataset=dataset, **raw)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def write_yaml(self, path: str | Path) -> None:
+        with open(path, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(self.to_dict(), handle, sort_keys=False)

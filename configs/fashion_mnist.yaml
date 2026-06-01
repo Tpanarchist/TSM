@@ -1,0 +1,37 @@
+run_name: fashion_mnist
+batch_size: 64
+max_steps: 1000
+learning_rate: 0.0003
+weight_decay: 0.0001
+num_workers: 0
+log_interval: 20
+checkpoint_interval: 100
+sample_interval: 100
+runs_dir: runs
+dataset:
+  name: fashion_mnist
+  split: train
+  cache_dir: data/hf
+  limit:
+  seed: 19
+model:
+  d_model: 192
+  workspace_latents: 48
+  hierarchy_depth: 2
+  contexts: 8
+  definitions_per_context: 16
+  image_channels: 1
+  image_size: 28
+  patch_size: 4
+  attention_heads: 4
+  inference_steps: 2
+  recon_weight: 1.0
+  pred_weight: 1.0
+  free_energy_weight: 0.03
+  complexity_weight: 0.01
+  context_entropy_weight: 0.001
+  context_balance_weight: 0.01
+  ternary_activation_weight: 0.001
+  bit_cost_weight: 0.0005
+  use_ternary_conditioning: true
+  ternary_condition_scale: 0.25

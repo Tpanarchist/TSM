@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tsm"
+version = "0.2.0"
+description = "Trainable PyTorch implementation scaffold for the Ternary Self-Map."
+readme = "tsm.md"
+requires-python = ">=3.11"
+dependencies = [
+  "torch==2.11.0+cu128",
+  "datasets[vision]>=3.0",
+  "numpy>=2.0",
+  "pillow>=10.0",
+  "pyyaml>=6.0",
+  "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.0"]
+
+[project.scripts]
+tsm = "tsm.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["tsm*"]
+
+[tool.setuptools.package-data]
+tsm = ["TSM_PYTORCH_DESIGN.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "online: requires network access and public dataset downloads",
+]
