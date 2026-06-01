@@ -47,6 +47,7 @@ class TsmConfig:
     active_file_query_temperature: float = 0.25
     active_file_expectation_weight: float = 0.0
     active_file_expectation_temperature: float = 0.25
+    active_file_expectation_hard_weight: float = 0.0
     active_file_expectation_detach_inputs: bool = True
     active_file_candidate_radius: float = 10.0
     active_file_candidate_max_age: float = 8.0

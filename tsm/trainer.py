@@ -306,6 +306,12 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                 if "reappeared_expected_file_instance_match_accuracy" in last_metrics:
                     handle.write(f"- final_reappeared_expected_file_instance_match_accuracy: {last_metrics['reappeared_expected_file_instance_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_expected_file_hard_instance_match_accuracy: {last_metrics['reappeared_expected_file_instance_hard_match_accuracy']:.3f}\n")
+                    if "reappeared_expected_state_instance_match_accuracy" in last_metrics:
+                        handle.write(f"- final_reappeared_expected_state_instance_match_accuracy: {last_metrics['reappeared_expected_state_instance_match_accuracy']:.3f}\n")
+                        handle.write(f"- final_reappeared_expected_state_hard_instance_match_accuracy: {last_metrics['reappeared_expected_state_instance_hard_match_accuracy']:.3f}\n")
+                    if "active_file_expectation_pair" in last_metrics:
+                        handle.write(f"- final_active_file_expectation_pair_loss: {last_metrics['active_file_expectation_pair']:.6f}\n")
+                        handle.write(f"- final_active_file_expectation_hard_loss: {last_metrics['active_file_expectation_hard']:.6f}\n")
                 if "reappeared_active_query_file_candidate_instance_match_accuracy" in last_metrics:
                     handle.write(f"- final_reappeared_active_query_file_match_accuracy: {last_metrics['reappeared_active_query_file_candidate_instance_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_active_query_file_hard_match_accuracy: {last_metrics['reappeared_active_query_file_candidate_instance_hard_match_accuracy']:.3f}\n")

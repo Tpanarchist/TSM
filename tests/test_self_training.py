@@ -47,6 +47,8 @@ def test_forward_train_returns_loss_dict_and_images():
         "reappearance_file_query",
         "active_file_query",
         "active_file_expectation",
+        "active_file_expectation_pair",
+        "active_file_expectation_hard",
         "learned_active_file_gate",
     }
     assert set(out.diagnostics) >= {
@@ -199,6 +201,7 @@ def test_forward_train_reports_temporal_object_diagnostics():
         attention_heads=4,
         inference_steps=1,
         active_file_expectation_weight=0.003,
+        active_file_expectation_hard_weight=1.0,
         learned_active_file_gate_context_features=True,
         learned_active_file_gate_expectation_features=True,
     )
@@ -266,6 +269,9 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_expected_file_paired_feature_match_accuracy",
         "reappeared_expected_file_instance_match_accuracy",
         "reappeared_expected_file_instance_hard_match_accuracy",
+        "reappeared_expected_state_paired_feature_match_accuracy",
+        "reappeared_expected_state_instance_match_accuracy",
+        "reappeared_expected_state_instance_hard_match_accuracy",
         "reappeared_active_query_file_candidate_instance_match_accuracy",
         "reappeared_active_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_active_query_file_candidate_mean_count",
