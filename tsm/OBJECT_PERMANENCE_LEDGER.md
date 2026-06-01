@@ -16,16 +16,17 @@ This ledger records the current experimental status of the temporal object-conti
 10. Candidate gating is learned from Definition/file geometry rather than position metadata: partial.
 11. Context-aware learned candidate gating improves lookup without densifying Definitions: yes.
 12. Object files carry explicit phase/trajectory state: yes, scaffolded.
-13. Object-file expectation predicts its own future Definition state: not yet.
-14. Full exact object permanence: not yet.
+13. Learned phase/trajectory dynamics predicts reappearance position better than naive velocity: yes.
+14. Object-file expectation predicts its own future Definition state: partial, still weak.
+15. Full exact object permanence: not yet.
 
 ## Current Claim
 
-TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance, especially against hard same-class negatives. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. A learned active gate can recover part of that live set from Definition/file geometry and context without position input, but it is still weaker than the scaffold. Object files now carry scaffolded phase/trajectory state, and the expectation head can use it, but this does not yet produce exact reappeared Definition/query prediction under held-out evaluation. Full object permanence is still not solved because visible reappeared state does not bind cleanly back to the exact object file under global lookup.
+TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance, especially against hard same-class negatives. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. A learned active gate can recover part of that live set from Definition/file geometry and context without position input, but it is still weaker than the scaffold. Object files now carry scaffolded phase/trajectory state, and a learned dynamics head can predict reappearance position much better than the naive velocity projection. This position-level win does not yet produce a strong future Definition/query prediction under held-out evaluation. Full object permanence is still not solved because visible reappeared state does not bind cleanly back to the exact object file under global lookup.
 
 ## Next Target
 
-The next mechanism should strengthen predictive object-file attention without making the ternary Definition layer dense. A reappearing visible state should eventually query a live candidate set shaped by learned context, recency, trajectory, expected phase, and predicted reappearance state before it competes against the full object-file field.
+The next mechanism should turn the learned position dynamics into representation-level expectation without making the ternary Definition layer dense. A reappearing visible state should eventually query a live candidate set shaped by learned context, recency, trajectory, expected phase, predicted reappearance region, and predicted Definition state before it competes against the full object-file field.
 
 ## Active Candidate-Gating Result
 
@@ -251,3 +252,41 @@ Latest held-out checkpoint:
 - trajectory position error: `0.364`
 
 This is a partial result. Adding phase/trajectory state makes the expectation losses lower and improves hard expected-state/file matching compared with the direct future-state run, while ternary remains sparse. But exact expected-state matching is still only at the paired chance floor, learned exact lookup does not improve, and the simple velocity projection is a bad predictor of the wrapped reappearance position. The useful lesson is narrower: object files now carry the missing state substrate, but the current projection is too crude. The next target is a learned phase-transition/trajectory model for reappearance position or phase-conditioned object-file prediction, not more pressure on the expectation head.
+
+## Learned Phase/Trajectory Dynamics Result
+
+Run: `runs/20260601_174437_temporal_objects_learned_trajectory_state`
+
+Config: `configs/temporal_objects_learned_trajectory_state.yaml`
+
+This run adds a learned object-file dynamics head. The head receives trajectory features, hidden/source context, file confidence, and age, then predicts a residual correction over the naive projected reappearance position. The corrected position can replace the naive projection inside the expectation features. The head is zero-initialized, so it starts equivalent to naive velocity projection and must earn any improvement through training.
+
+Best held-out checkpoint:
+
+- dynamics loss: `0.007424`
+- trajectory position error: `0.364`
+- learned dynamics position error: `0.142`
+- learned dynamics position improvement: `+0.222`
+- expected-state exact / hard match: `0.133` / `0.211`
+- expected-file exact / hard match: `0.156` / `0.235`
+- learned target recall: `0.866`
+- learned exact / hard match: `0.235` / `0.419`
+- scaffolded active exact / hard match: `0.313` / `0.577`
+- occluded bridge: `+0.485`
+- ternary nonzero fraction: `0.106`
+
+Latest held-out checkpoint:
+
+- dynamics loss: `0.007096`
+- trajectory position error: `0.364`
+- learned dynamics position error: `0.138`
+- learned dynamics position improvement: `+0.226`
+- expected-state exact / hard match: `0.127` / `0.127`
+- expected-file exact / hard match: `0.049` / `0.127`
+- learned target recall: `0.866`
+- learned exact / hard match: `0.235` / `0.387`
+- scaffolded active exact / hard match: `0.313` / `0.479`
+- occluded bridge: `+0.341`
+- ternary nonzero fraction: `0.107`
+
+This is a position-level success and a representation-level mixed result. The learned dynamics head clearly beats the naive velocity projection on held-out wrapped reappearance position, cutting normalized position error from about `0.364` to about `0.14`. It also keeps the occluded bridge alive and does not cause ternary densification beyond the recent expectation runs. But the better position estimate does not yet translate into stronger expected Definition-state matching or learned global file rebinding. The next target is not more dynamics loss; it is making the predicted region/phase condition a better future Definition-state expectation.

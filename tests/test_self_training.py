@@ -5,6 +5,9 @@ from tsm.memory import Memory
 from tsm.self_field import (
     Self,
     _active_file_candidate_mask,
+    _active_file_dynamics_features,
+    _active_file_dynamics_input_dim,
+    _active_file_dynamics_position,
     _active_file_expectation,
     _active_file_gate_input_dim,
     _active_file_gate_logits,
@@ -50,6 +53,7 @@ def test_forward_train_returns_loss_dict_and_images():
         "active_file_expectation",
         "active_file_expectation_pair",
         "active_file_expectation_hard",
+        "active_file_dynamics",
         "learned_active_file_gate",
     }
     assert set(out.diagnostics) >= {
@@ -193,6 +197,29 @@ def test_active_file_expectation_predicts_query_shape():
     assert expected_query.shape == (2, cfg.definitions_per_context)
 
 
+def test_active_file_dynamics_predicts_position_shape():
+    cfg = TsmConfig(
+        d_model=32,
+        workspace_latents=8,
+        contexts=3,
+        definitions_per_context=4,
+        image_size=16,
+        image_channels=1,
+        patch_size=4,
+        attention_heads=4,
+        inference_steps=1,
+        active_file_expectation_trajectory_features=True,
+    )
+    model = Self(cfg)
+    features = torch.rand(2, _active_file_dynamics_input_dim(cfg))
+    projected = torch.tensor([[3.0, 4.0], [5.0, 6.0]])
+
+    position = _active_file_dynamics_position(model.active_file_dynamics, features, projected, cfg)
+
+    assert position.shape == (2, 2)
+    assert torch.allclose(position, projected)
+
+
 def test_object_memory_tracks_velocity_and_phase():
     memory = Memory()
     batch = {
@@ -225,6 +252,8 @@ def test_forward_train_reports_temporal_object_diagnostics():
         active_file_expectation_weight=0.003,
         active_file_expectation_hard_weight=1.0,
         active_file_expectation_trajectory_features=True,
+        active_file_expectation_dynamics_features=True,
+        active_file_dynamics_weight=0.01,
         learned_active_file_gate_context_features=True,
         learned_active_file_gate_expectation_features=True,
     )
@@ -297,6 +326,9 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_expected_state_instance_hard_match_accuracy",
         "reappeared_trajectory_position_error",
         "reappeared_trajectory_valid_fraction",
+        "reappeared_dynamics_position_error",
+        "reappeared_dynamics_position_improvement",
+        "reappeared_dynamics_valid_fraction",
         "reappeared_active_query_file_candidate_instance_match_accuracy",
         "reappeared_active_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_active_query_file_candidate_mean_count",
@@ -311,3 +343,16 @@ def test_forward_train_reports_temporal_object_diagnostics():
     }
     assert torch.allclose(out.diagnostics["temporal_visible_fraction"], torch.tensor(0.6), atol=1e-6)
     assert torch.allclose(out.diagnostics["temporal_occluded_fraction"], torch.tensor(0.4), atol=1e-6)
+
+    dynamics_features = _active_file_dynamics_features(
+        batch,
+        model.memory.read_write_object_files(batch, torch.rand(5, cfg.d_model), step=1),
+        torch.ones(5, dtype=torch.bool),
+        cfg,
+        torch.float32,
+        torch.device("cpu"),
+        torch.softmax(torch.rand(5, cfg.contexts), dim=-1),
+        torch.ones(5, 1),
+        torch.zeros(5, 1),
+    )
+    assert dynamics_features.shape == (5, _active_file_dynamics_input_dim(cfg))

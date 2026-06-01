@@ -210,6 +210,14 @@ def _active_file_expectation_input_dim(cfg: TsmConfig) -> int:
     return dim
 
 
+def _active_file_trajectory_width(cfg: TsmConfig) -> int:
+    return 13 + 2 * cfg.active_file_expectation_phase_count
+
+
+def _active_file_dynamics_input_dim(cfg: TsmConfig) -> int:
+    return _active_file_trajectory_width(cfg) + cfg.contexts + 2
+
+
 def _active_file_trajectory_features(
     batch: dict[str, torch.Tensor],
     memory_read,
@@ -217,9 +225,10 @@ def _active_file_trajectory_features(
     cfg: TsmConfig,
     dtype: torch.dtype,
     device: torch.device,
+    projected_position: torch.Tensor | None = None,
 ) -> torch.Tensor:
     count = int(mask.to(torch.long).sum().item())
-    width = 13 + 2 * cfg.active_file_expectation_phase_count
+    width = _active_file_trajectory_width(cfg)
     if count == 0:
         return torch.zeros((0, width), dtype=dtype, device=device)
     position = memory_read.position[mask].to(device=device, dtype=dtype)
@@ -227,11 +236,14 @@ def _active_file_trajectory_features(
     position_valid = memory_read.position_valid[mask].to(device=device, dtype=dtype).unsqueeze(-1)
     velocity_valid = memory_read.velocity_valid[mask].to(device=device, dtype=dtype).unsqueeze(-1)
     scale = float(max(1, cfg.image_size))
-    projected = position + velocity
-    wrap_span = _active_file_wrap_span(cfg)
-    if wrap_span is not None and wrap_span > 0:
-        margin = float(max(4, cfg.image_size // 7))
-        projected = ((projected - margin) % float(wrap_span)) + margin
+    if projected_position is None:
+        projected = position + velocity
+        wrap_span = _active_file_wrap_span(cfg)
+        if wrap_span is not None and wrap_span > 0:
+            margin = float(max(4, cfg.image_size // 7))
+            projected = ((projected - margin) % float(wrap_span)) + margin
+    else:
+        projected = projected_position[:count].to(device=device, dtype=dtype)
     velocity_mag = velocity.norm(dim=-1, keepdim=True) / scale
     base = [
         position / scale,
@@ -279,6 +291,44 @@ def _active_file_projected_position(
         projected = ((projected - margin) % float(wrap_span)) + margin
     valid = memory_read.position_valid[mask].to(device=device) & memory_read.velocity_valid[mask].to(device=device)
     return projected, valid
+
+
+def _active_file_dynamics_features(
+    batch: dict[str, torch.Tensor],
+    memory_read,
+    mask: torch.Tensor,
+    cfg: TsmConfig,
+    dtype: torch.dtype,
+    device: torch.device,
+    file_context: torch.Tensor,
+    file_confidence: torch.Tensor,
+    file_age: torch.Tensor,
+) -> torch.Tensor:
+    count = int(mask.to(torch.long).sum().item())
+    if count == 0:
+        return torch.zeros((0, _active_file_dynamics_input_dim(cfg)), dtype=dtype, device=device)
+    trajectory = _active_file_trajectory_features(batch, memory_read, mask, cfg, dtype, device)
+    count = min(count, trajectory.shape[0], file_context.shape[0], file_confidence.shape[0], file_age.shape[0])
+    context_features = file_context[:count].to(device=device, dtype=dtype)
+    confidence = file_confidence[:count].to(device=device, dtype=dtype)
+    age = file_age[:count].to(device=device, dtype=dtype)
+    age = torch.log1p(age.clamp_min(0.0)) / max(cfg.active_file_candidate_max_age, 1.0)
+    return torch.cat([trajectory[:count], context_features, confidence, age], dim=-1)
+
+
+def _active_file_dynamics_position(
+    dynamics: nn.Module,
+    dynamics_features: torch.Tensor,
+    projected_position: torch.Tensor,
+    cfg: TsmConfig,
+) -> torch.Tensor:
+    if dynamics_features.numel() == 0 or projected_position.numel() == 0:
+        return torch.zeros((0, 2), dtype=dynamics_features.dtype, device=dynamics_features.device)
+    count = min(dynamics_features.shape[0], projected_position.shape[0])
+    scale = float(max(1, cfg.image_size))
+    base_position = projected_position[:count].to(device=dynamics_features.device, dtype=dynamics_features.dtype) / scale
+    delta = torch.tanh(dynamics(dynamics_features[:count])) * float(cfg.active_file_dynamics_delta_scale)
+    return (base_position + delta).clamp(0.0, 1.0) * scale
 
 
 def _active_file_expectation(
@@ -506,6 +556,15 @@ class Self(nn.Module):
         )
         nn.init.zeros_(self.active_file_expectation[-1].weight)
         nn.init.zeros_(self.active_file_expectation[-1].bias)
+        dynamics_input = _active_file_dynamics_input_dim(self.cfg)
+        dynamics_hidden = max(16, dynamics_input)
+        self.active_file_dynamics = nn.Sequential(
+            nn.Linear(dynamics_input, dynamics_hidden),
+            nn.GELU(),
+            nn.Linear(dynamics_hidden, 2),
+        )
+        nn.init.zeros_(self.active_file_dynamics[-1].weight)
+        nn.init.zeros_(self.active_file_dynamics[-1].bias)
         self.drive_dynamics = DriveDynamics()
         self.memory = Memory()
         self.evidence = EvidenceAccumulator()
@@ -680,6 +739,7 @@ class Self(nn.Module):
         active_file_expectation = _zero_like_scalar(image_t)
         active_file_expectation_pair = _zero_like_scalar(image_t)
         active_file_expectation_hard = _zero_like_scalar(image_t)
+        active_file_dynamics = _zero_like_scalar(image_t)
         learned_active_file_gate = _zero_like_scalar(image_t)
         needs_reappearance_target = (
             self.cfg.reappearance_alignment_weight > 0.0
@@ -687,6 +747,7 @@ class Self(nn.Module):
             or self.cfg.reappearance_file_query_weight > 0.0
             or self.cfg.active_file_query_weight > 0.0
             or self.cfg.active_file_expectation_weight > 0.0
+            or self.cfg.active_file_dynamics_weight > 0.0
             or self.cfg.learned_active_file_gate_weight > 0.0
         )
         if needs_reappearance_target and "visible_tp1" in batch and "occluded_t" in batch:
@@ -734,6 +795,58 @@ class Self(nn.Module):
                     target_query_scores = self.defs.file_query_scores(target_scores)
                 expected_state_scores = None
                 expected_query_scores = None
+                dynamics_position = None
+                projected_position = None
+                dynamics_valid = None
+                needs_dynamics_position = (
+                    self.cfg.active_file_dynamics_weight > 0.0
+                    or self.cfg.active_file_expectation_dynamics_features
+                )
+                if needs_dynamics_position and "object_position_tp1" in batch:
+                    projected_position, _projected_valid = _active_file_projected_position(
+                        memory_read,
+                        reappeared_for_alignment,
+                        self.cfg,
+                        image_t.dtype,
+                        image_t.device,
+                    )
+                    dynamics_features = _active_file_dynamics_features(
+                        batch,
+                        memory_read,
+                        reappeared_for_alignment,
+                        self.cfg,
+                        image_t.dtype,
+                        image_t.device,
+                        context.probs[reappeared_for_alignment],
+                        memory_definition_confidence[reappeared_for_alignment],
+                        memory_read.age[reappeared_for_alignment],
+                    )
+                    dynamics_valid = (
+                        memory_read.position_valid[reappeared_for_alignment]
+                        & memory_read.hit[reappeared_for_alignment]
+                        & (
+                            memory_read.age[reappeared_for_alignment].view(-1)
+                            <= self.cfg.active_file_candidate_max_age
+                        )
+                    )
+                    if self.cfg.active_file_dynamics_detach_inputs:
+                        dynamics_features = dynamics_features.detach()
+                        projected_position = projected_position.detach()
+                    dynamics_position = _active_file_dynamics_position(
+                        self.active_file_dynamics,
+                        dynamics_features,
+                        projected_position,
+                        self.cfg,
+                    )
+                    if self.cfg.active_file_dynamics_weight > 0.0 and bool(dynamics_valid.any().item()):
+                        target_position = batch["object_position_tp1"].to(device=image_t.device, dtype=image_t.dtype)[
+                            reappeared_for_alignment
+                        ]
+                        scale = float(max(1, self.cfg.image_size))
+                        active_file_dynamics = F.smooth_l1_loss(
+                            dynamics_position[dynamics_valid] / scale,
+                            target_position[dynamics_valid] / scale,
+                        )
                 needs_file_expectation = (
                     self.cfg.active_file_expectation_weight > 0.0
                     or self.cfg.learned_active_file_gate_expectation_features
@@ -751,6 +864,9 @@ class Self(nn.Module):
                             self.cfg,
                             image_t.dtype,
                             image_t.device,
+                            dynamics_position
+                            if self.cfg.active_file_expectation_dynamics_features
+                            else None,
                         )
                         if self.cfg.active_file_expectation_trajectory_features
                         else None
@@ -927,6 +1043,7 @@ class Self(nn.Module):
             "active_file_expectation": active_file_expectation,
             "active_file_expectation_pair": active_file_expectation_pair,
             "active_file_expectation_hard": active_file_expectation_hard,
+            "active_file_dynamics": active_file_dynamics,
             "learned_active_file_gate": learned_active_file_gate,
         }
         diagnostics = {
@@ -1266,6 +1383,48 @@ class Self(nn.Module):
                     target_query_scores = self.defs.file_query_scores(target_definition_scores)
                     expected_state_scores = None
                     expected_query_scores = None
+                    dynamics_position = None
+                    dynamics_valid = None
+                    projected_position = None
+                    needs_dynamics_position = (
+                        self.cfg.active_file_dynamics_weight > 0.0
+                        or self.cfg.active_file_expectation_dynamics_features
+                    )
+                    if needs_dynamics_position and "object_position_tp1" in batch:
+                        projected_position, _projected_valid = _active_file_projected_position(
+                            memory_read,
+                            reappeared_active,
+                            self.cfg,
+                            image_t.dtype,
+                            image_t.device,
+                        )
+                        dynamics_features = _active_file_dynamics_features(
+                            batch,
+                            memory_read,
+                            reappeared_active,
+                            self.cfg,
+                            image_t.dtype,
+                            image_t.device,
+                            context.probs[reappeared_active],
+                            memory_definition_confidence[reappeared_active],
+                            memory_read.age[reappeared_active],
+                        )
+                        dynamics_valid = (
+                            memory_read.position_valid[reappeared_active]
+                            & memory_read.hit[reappeared_active]
+                            & (
+                                memory_read.age[reappeared_active].view(-1)
+                                <= self.cfg.active_file_candidate_max_age
+                            )
+                        )
+                        dynamics_features = dynamics_features.detach()
+                        projected_position = projected_position.detach()
+                        dynamics_position = _active_file_dynamics_position(
+                            self.active_file_dynamics,
+                            dynamics_features,
+                            projected_position,
+                            self.cfg,
+                        )
                     if (
                         self.cfg.active_file_expectation_weight > 0.0
                         or self.cfg.learned_active_file_gate_expectation_features
@@ -1278,6 +1437,9 @@ class Self(nn.Module):
                                 self.cfg,
                                 image_t.dtype,
                                 image_t.device,
+                                dynamics_position
+                                if self.cfg.active_file_expectation_dynamics_features
+                                else None,
                             )
                             if self.cfg.active_file_expectation_trajectory_features
                             else None
@@ -1360,7 +1522,14 @@ class Self(nn.Module):
                                 target_definition_scores.to(image_t.dtype),
                             ),
                         ))
-                    if self.cfg.active_file_expectation_trajectory_features and "object_position_tp1" in batch:
+                    if (
+                        (
+                            self.cfg.active_file_expectation_trajectory_features
+                            or self.cfg.active_file_dynamics_weight > 0.0
+                            or self.cfg.active_file_expectation_dynamics_features
+                        )
+                        and "object_position_tp1" in batch
+                    ):
                         projected_position, projected_valid = _active_file_projected_position(
                             memory_read,
                             reappeared_active,
@@ -1379,6 +1548,27 @@ class Self(nn.Module):
                             position_error = _zero_like_scalar(image_t)
                         diagnostics["reappeared_trajectory_position_error"] = position_error
                         diagnostics["reappeared_trajectory_valid_fraction"] = projected_valid.to(image_t.dtype).mean()
+                        if dynamics_position is not None and dynamics_valid is not None:
+                            shared_valid = projected_valid & dynamics_valid
+                            if bool(dynamics_valid.any().item()):
+                                dynamics_error = (
+                                    dynamics_position[dynamics_valid] - target_position[dynamics_valid]
+                                ).norm(dim=-1).mean() / float(max(1, self.cfg.image_size))
+                            else:
+                                dynamics_error = _zero_like_scalar(image_t)
+                            if bool(shared_valid.any().item()):
+                                shared_projected_error = (
+                                    projected_position[shared_valid] - target_position[shared_valid]
+                                ).norm(dim=-1).mean() / float(max(1, self.cfg.image_size))
+                                shared_dynamics_error = (
+                                    dynamics_position[shared_valid] - target_position[shared_valid]
+                                ).norm(dim=-1).mean() / float(max(1, self.cfg.image_size))
+                                dynamics_improvement = shared_projected_error - shared_dynamics_error
+                            else:
+                                dynamics_improvement = _zero_like_scalar(image_t)
+                            diagnostics["reappeared_dynamics_position_error"] = dynamics_error
+                            diagnostics["reappeared_dynamics_position_improvement"] = dynamics_improvement
+                            diagnostics["reappeared_dynamics_valid_fraction"] = dynamics_valid.to(image_t.dtype).mean()
                     active_candidates = None
                     if "object_position_tp1" in batch:
                         active_candidates = _active_file_candidate_mask(
@@ -1599,6 +1789,9 @@ class Self(nn.Module):
                         "reappeared_expected_state_instance_hard_valid_fraction": _zero_like_scalar(image_t),
                         "reappeared_trajectory_position_error": _zero_like_scalar(image_t),
                         "reappeared_trajectory_valid_fraction": _zero_like_scalar(image_t),
+                        "reappeared_dynamics_position_error": _zero_like_scalar(image_t),
+                        "reappeared_dynamics_position_improvement": _zero_like_scalar(image_t),
+                        "reappeared_dynamics_valid_fraction": _zero_like_scalar(image_t),
                         "reappeared_active_query_file_candidate_instance_match_accuracy": _zero_like_scalar(image_t),
                         "reappeared_active_query_file_candidate_instance_match_margin": _zero_like_scalar(image_t),
                         "reappeared_active_query_file_candidate_instance_same_distance": _zero_like_scalar(image_t),
@@ -1655,6 +1848,7 @@ class Self(nn.Module):
             + self.cfg.reappearance_file_query_weight * losses["reappearance_file_query"]
             + self.cfg.active_file_query_weight * losses["active_file_query"]
             + self.cfg.active_file_expectation_weight * losses["active_file_expectation"]
+            + self.cfg.active_file_dynamics_weight * losses["active_file_dynamics"]
             + self.cfg.learned_active_file_gate_weight * losses["learned_active_file_gate"]
         )
         self.memory.write(sae.eps, sae.coherence)
