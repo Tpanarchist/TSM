@@ -40,6 +40,9 @@ class TsmConfig:
     object_cycle_temperature: float = 0.25
     object_cycle_pair_weight: float = 0.25
     object_cycle_file_weight: float = 0.25
+    reappearance_file_query_weight: float = 0.0
+    reappearance_file_query_temperature: float = 0.25
+    reappearance_file_query_hard_weight: float = 1.0
 
 
 @dataclass

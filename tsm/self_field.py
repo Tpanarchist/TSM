@@ -128,6 +128,41 @@ def _bidirectional_paired_contrastive_loss(
     )
 
 
+def _grouped_contrastive_query_loss(
+    query: torch.Tensor,
+    files: torch.Tensor,
+    instance_labels: torch.Tensor,
+    group_labels: torch.Tensor,
+    temperature: float,
+) -> torch.Tensor:
+    if query.shape[0] < 2 or files.shape[0] < 2:
+        return _zero_like_scalar(query)
+    pair_count = min(query.shape[0], files.shape[0], instance_labels.shape[0], group_labels.shape[0])
+    query = F.normalize(query[:pair_count], dim=-1, eps=1e-6)
+    files = F.normalize(files[:pair_count].to(device=query.device, dtype=query.dtype), dim=-1, eps=1e-6)
+    instance_labels = instance_labels[:pair_count].to(device=query.device, dtype=torch.long)
+    group_labels = group_labels[:pair_count].to(device=query.device, dtype=torch.long)
+    valid = (instance_labels >= 0) & (group_labels >= 0)
+    query = query[valid]
+    files = files[valid]
+    instance_labels = instance_labels[valid]
+    group_labels = group_labels[valid]
+    if query.shape[0] < 2:
+        return _zero_like_scalar(query)
+    losses: list[torch.Tensor] = []
+    for row in range(query.shape[0]):
+        same_group = group_labels == group_labels[row]
+        same_instance = instance_labels == instance_labels[row]
+        candidates = same_group
+        targets = same_instance & candidates
+        if int(candidates.to(torch.long).sum().item()) < 2 or not bool(targets.any().item()):
+            continue
+        logits = torch.matmul(query[row : row + 1], files[candidates].t()) / max(temperature, 1e-6)
+        target_positions = torch.nonzero(targets[candidates], as_tuple=False).flatten()
+        losses.append(F.cross_entropy(logits, target_positions[:1]))
+    return torch.stack(losses).mean() if losses else _zero_like_scalar(query)
+
+
 def _object_cycle_loss(
     hidden_scores: torch.Tensor,
     reappeared_scores: torch.Tensor,
@@ -330,8 +365,11 @@ class Self(nn.Module):
         )
         reappearance_alignment = _zero_like_scalar(image_t)
         object_cycle_consistency = _zero_like_scalar(image_t)
+        reappearance_file_query = _zero_like_scalar(image_t)
         needs_reappearance_target = (
-            self.cfg.reappearance_alignment_weight > 0.0 or self.cfg.object_cycle_weight > 0.0
+            self.cfg.reappearance_alignment_weight > 0.0
+            or self.cfg.object_cycle_weight > 0.0
+            or self.cfg.reappearance_file_query_weight > 0.0
         )
         if needs_reappearance_target and "visible_tp1" in batch and "occluded_t" in batch:
             visible_tp1_for_alignment = batch["visible_tp1"].to(device=image_t.device, dtype=image_t.dtype)
@@ -356,7 +394,10 @@ class Self(nn.Module):
                         target_scores,
                         self.cfg.reappearance_alignment_temperature,
                     )
-                if self.cfg.object_cycle_weight > 0.0:
+                needs_file_anchor = (
+                    self.cfg.object_cycle_weight > 0.0 or self.cfg.reappearance_file_query_weight > 0.0
+                )
+                if needs_file_anchor:
                     source_file_scores = self.defs.memory_scores(
                         memory_feature[reappeared_for_alignment],
                         context.probs[reappeared_for_alignment],
@@ -367,6 +408,7 @@ class Self(nn.Module):
                         target_context_probs,
                         memory_definition_confidence[reappeared_for_alignment],
                     )
+                if self.cfg.object_cycle_weight > 0.0:
                     object_cycle_consistency = _object_cycle_loss(
                         source_reappeared_scores,
                         target_scores,
@@ -375,6 +417,27 @@ class Self(nn.Module):
                         self.cfg.object_cycle_temperature,
                         self.cfg.object_cycle_pair_weight,
                         self.cfg.object_cycle_file_weight,
+                    )
+                if self.cfg.reappearance_file_query_weight > 0.0:
+                    target_query_scores = self.defs.file_query_scores(target_scores)
+                    file_query_pair = _bidirectional_paired_contrastive_loss(
+                        target_query_scores,
+                        target_file_scores,
+                        self.cfg.reappearance_file_query_temperature,
+                    )
+                    file_query_hard = _zero_like_scalar(image_t)
+                    if "sequence_id" in batch and "object_id" in batch:
+                        sequence_id = batch["sequence_id"].to(device=image_t.device, dtype=torch.long)
+                        object_id = batch["object_id"].to(device=image_t.device, dtype=torch.long)
+                        file_query_hard = _grouped_contrastive_query_loss(
+                            target_query_scores,
+                            target_file_scores,
+                            sequence_id[reappeared_for_alignment],
+                            object_id[reappeared_for_alignment],
+                            self.cfg.reappearance_file_query_temperature,
+                        )
+                    reappearance_file_query = (
+                        file_query_pair + self.cfg.reappearance_file_query_hard_weight * file_query_hard
                     )
         prior = self.reality.context_prior(context.probs)
         free_energy = variational_free_energy(sae.raw, sae.precision, q, prior)
@@ -400,6 +463,7 @@ class Self(nn.Module):
             "bit_cost": self.defs.bit_cost(),
             "reappearance_alignment": reappearance_alignment,
             "object_cycle_consistency": object_cycle_consistency,
+            "reappearance_file_query": reappearance_file_query,
         }
         diagnostics = {
             "context_max_probability": context.probs.max(dim=-1).values.mean(),
@@ -735,6 +799,7 @@ class Self(nn.Module):
                         target_context_probs,
                         memory_definition_confidence[reappeared_active],
                     )
+                    target_query_scores = self.defs.file_query_scores(target_definition_scores)
                     source_labels = object_id[reappeared_active]
                     diagnostics.update(_prefix_metrics(
                         "reappeared_",
@@ -780,6 +845,13 @@ class Self(nn.Module):
                             target_object_file_scores.to(image_t.dtype),
                         ),
                     ))
+                    diagnostics.update(_prefix_metrics(
+                        "reappeared_query_file_",
+                        paired_feature_match_diagnostics(
+                            target_query_scores.to(image_t.dtype),
+                            target_object_file_scores.to(image_t.dtype),
+                        ),
+                    ))
                     if "sequence_id" in batch:
                         sequence_id = batch["sequence_id"].to(device=image_t.device, dtype=torch.long)
                         source_sequences = sequence_id[reappeared_active]
@@ -798,6 +870,17 @@ class Self(nn.Module):
                             "reappeared_target_file_",
                             grouped_instance_match_diagnostics(
                                 target_definition_scores.to(image_t.dtype),
+                                target_object_file_scores.to(image_t.dtype),
+                                source_sequences,
+                                source_sequences,
+                                source_labels,
+                                source_labels,
+                            ),
+                        ))
+                        diagnostics.update(_prefix_metrics(
+                            "reappeared_query_file_",
+                            grouped_instance_match_diagnostics(
+                                target_query_scores.to(image_t.dtype),
                                 target_object_file_scores.to(image_t.dtype),
                                 source_sequences,
                                 source_sequences,
@@ -849,6 +932,19 @@ class Self(nn.Module):
                         "reappeared_target_file_instance_hard_same_distance": _zero_like_scalar(image_t),
                         "reappeared_target_file_instance_nearest_same_group_other_distance": _zero_like_scalar(image_t),
                         "reappeared_target_file_instance_hard_valid_fraction": _zero_like_scalar(image_t),
+                        "reappeared_query_file_paired_feature_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_query_file_paired_feature_match_margin": _zero_like_scalar(image_t),
+                        "reappeared_query_file_paired_feature_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_query_file_paired_feature_nearest_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_query_file_instance_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_query_file_instance_match_margin": _zero_like_scalar(image_t),
+                        "reappeared_query_file_instance_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_query_file_instance_nearest_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_query_file_instance_hard_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_query_file_instance_hard_margin": _zero_like_scalar(image_t),
+                        "reappeared_query_file_instance_hard_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_query_file_instance_nearest_same_group_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_query_file_instance_hard_valid_fraction": _zero_like_scalar(image_t),
                         "reappeared_base_feature_match_accuracy": _zero_like_scalar(image_t),
                         "reappeared_base_feature_match_margin": _zero_like_scalar(image_t),
                         "reappeared_base_feature_same_distance": _zero_like_scalar(image_t),
@@ -871,6 +967,7 @@ class Self(nn.Module):
             + self.cfg.bit_cost_weight * losses["bit_cost"]
             + self.cfg.reappearance_alignment_weight * losses["reappearance_alignment"]
             + self.cfg.object_cycle_weight * losses["object_cycle_consistency"]
+            + self.cfg.reappearance_file_query_weight * losses["reappearance_file_query"]
         )
         self.memory.write(sae.eps, sae.coherence)
         for candidate in self.evidence.accumulate(delta_q, sae.coherence):

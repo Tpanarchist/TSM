@@ -44,3 +44,6 @@ model:
   object_cycle_temperature: 0.25
   object_cycle_pair_weight: 0.25
   object_cycle_file_weight: 0.25
+  reappearance_file_query_weight: 0.0
+  reappearance_file_query_temperature: 0.25
+  reappearance_file_query_hard_weight: 1.0

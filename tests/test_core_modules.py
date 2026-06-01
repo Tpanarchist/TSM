@@ -95,6 +95,7 @@ def test_definition_bank_can_project_memory_trace():
     conditioned = bank.project(eps, ctx, memory_feature, memory_confidence)
     raw = bank.raw_scores(eps, ctx, memory_feature, memory_confidence)
     memory_raw = bank.memory_scores(memory_feature, ctx, memory_confidence)
+    query_raw = bank.file_query_scores(memory_raw)
 
     assert base[0, 0].item() == 0.0
     assert conditioned[0, 0].item() > 0.0
@@ -102,3 +103,4 @@ def test_definition_bank_can_project_memory_trace():
     assert raw[0, 0].item() > 0.0
     assert memory_raw.shape == conditioned.shape
     assert memory_raw[0, 0].item() > 0.0
+    assert torch.allclose(query_raw, memory_raw)

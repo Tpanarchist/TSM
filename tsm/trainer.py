@@ -78,11 +78,22 @@ def save_checkpoint(path: Path, model: Self, optimizer: torch.optim.Optimizer | 
     torch.save(payload, path)
 
 
+def _load_model_state(model: Self, state: dict[str, torch.Tensor]) -> None:
+    result = model.load_state_dict(state, strict=False)
+    allowed_missing = {"defs.file_query.weight"}
+    missing = set(result.missing_keys)
+    unexpected = set(result.unexpected_keys)
+    if missing - allowed_missing or unexpected:
+        raise RuntimeError(
+            f"checkpoint state mismatch: missing={sorted(missing)}, unexpected={sorted(unexpected)}"
+        )
+
+
 def load_model_from_checkpoint(checkpoint: str | Path, device: torch.device) -> tuple[Self, TrainConfig, dict]:
     payload = torch.load(checkpoint, map_location=device)
     cfg = TrainConfig.from_dict(payload["config"])
     model = Self(cfg.model).to(device)
-    model.load_state_dict(payload["model_state"])
+    _load_model_state(model, payload["model_state"])
     return model, cfg, payload
 
 
@@ -139,9 +150,15 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
     best = math.inf
     if resume:
         payload = torch.load(resume, map_location=device)
-        model.load_state_dict(payload["model_state"])
+        _load_model_state(model, payload["model_state"])
         if payload.get("optimizer_state"):
-            optimizer.load_state_dict(payload["optimizer_state"])
+            try:
+                optimizer.load_state_dict(payload["optimizer_state"])
+            except ValueError:
+                if "defs.file_query.weight" not in payload["model_state"]:
+                    pass
+                else:
+                    raise
         start_step = int(payload.get("step", 0))
         best = float(payload.get("best_loss", math.inf))
     metrics_path = run_dir / "metrics.jsonl"
@@ -280,6 +297,8 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                 handle.write(f"- final_reappeared_file_hard_instance_match_accuracy: {last_metrics['reappeared_file_instance_hard_match_accuracy']:.3f}\n")
                 handle.write(f"- final_reappeared_target_file_instance_match_accuracy: {last_metrics['reappeared_target_file_instance_match_accuracy']:.3f}\n")
                 handle.write(f"- final_reappeared_target_file_hard_instance_match_accuracy: {last_metrics['reappeared_target_file_instance_hard_match_accuracy']:.3f}\n")
+                handle.write(f"- final_reappeared_query_file_instance_match_accuracy: {last_metrics['reappeared_query_file_instance_match_accuracy']:.3f}\n")
+                handle.write(f"- final_reappeared_query_file_hard_instance_match_accuracy: {last_metrics['reappeared_query_file_instance_hard_match_accuracy']:.3f}\n")
             if "occluded_memory_object_feature_probe_accuracy" in last_metrics:
                 handle.write(f"- final_occluded_memory_object_probe_accuracy: {last_metrics['occluded_memory_object_feature_probe_accuracy']:.3f}\n")
                 handle.write(f"- final_occluded_memory_object_centroid_separation: {last_metrics['occluded_memory_object_feature_centroid_separation']:.3f}\n")
@@ -460,10 +479,10 @@ def run_seed_sweep(
         handle.write(
             "| seed | condition | heldout_total | heldout_prediction | probe | "
             "occluded_probe | occluded_base | bridge_delta | reappear_match | "
-            "reappear_pair | file_instance | file_hard | target_file_instance | "
+            "reappear_pair | file_instance | file_hard | target_file_instance | query_file | query_hard | "
             "memory_def_impact | mi | nonzero | axis_usage | run |\n"
         )
-        handle.write("|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
+        handle.write("|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
         for row in rows:
             heldout = row["heldout"]
             axis = row["axis_diagnostics"]
@@ -481,6 +500,8 @@ def run_seed_sweep(
                 f"{_metric(heldout, 'reappeared_file_instance_match_accuracy'):.3f} | "
                 f"{_metric(heldout, 'reappeared_file_instance_hard_match_accuracy'):.3f} | "
                 f"{_metric(heldout, 'reappeared_target_file_instance_match_accuracy'):.3f} | "
+                f"{_metric(heldout, 'reappeared_query_file_instance_match_accuracy'):.3f} | "
+                f"{_metric(heldout, 'reappeared_query_file_instance_hard_match_accuracy'):.3f} | "
                 f"{_metric(heldout, 'memory_definition_prediction_occluded_impact_mean'):.6f} | "
                 f"{_metric(axis, 'ternary_mode_mutual_information'):.3f} | "
                 f"{_metric(heldout, 'ternary_nonzero_fraction'):.3f} | "

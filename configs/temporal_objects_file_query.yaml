@@ -1,4 +1,4 @@
-run_name: temporal_objects_reappearance_cycle
+run_name: temporal_objects_file_query
 batch_size: 64
 max_steps: 300
 learning_rate: 0.0008
@@ -38,12 +38,12 @@ model:
   use_memory_conditioning: true
   memory_condition_scale: 0.2
   memory_definition_scale: 0.75
-  reappearance_alignment_weight: 0.01
+  reappearance_alignment_weight: 0.0
   reappearance_alignment_temperature: 0.25
-  object_cycle_weight: 0.005
+  object_cycle_weight: 0.01
   object_cycle_temperature: 0.25
   object_cycle_pair_weight: 0.25
   object_cycle_file_weight: 0.25
-  reappearance_file_query_weight: 0.0
+  reappearance_file_query_weight: 0.002
   reappearance_file_query_temperature: 0.25
   reappearance_file_query_hard_weight: 1.0

@@ -31,6 +31,8 @@ class DefinitionBank(nn.Module):
         self.memory_axes = nn.Parameter(torch.randn(cfg.contexts, cfg.definitions_per_context, cfg.d_model) * scale)
         self.log_tau = nn.Parameter(torch.full((cfg.contexts, cfg.definitions_per_context), -2.0))
         self.log_alpha = nn.Parameter(torch.zeros(cfg.contexts, cfg.definitions_per_context))
+        self.file_query = nn.Linear(cfg.definitions_per_context, cfg.definitions_per_context, bias=False)
+        nn.init.eye_(self.file_query.weight)
         self.records = [
             TsmDefinition(name=f"ctx{k}_def{j}", kind="learned")
             for k in range(cfg.contexts)
@@ -99,8 +101,12 @@ class DefinitionBank(nn.Module):
         memory_raw = torch.einsum("bk,bkj->bj", ctx_probs, memory_per_ctx)
         return self.cfg.memory_definition_scale * confidence.clamp(0.0, 1.0) * memory_raw
 
+    def file_query_scores(self, definition_scores: torch.Tensor) -> torch.Tensor:
+        return self.file_query(definition_scores)
+
     def bit_cost(self) -> torch.Tensor:
         tau_cost = self.log_tau.exp().reciprocal().mean()
         alpha_cost = self.log_alpha.exp().mean()
         axis_cost = self.axes.square().mean() + self.memory_axes.square().mean()
-        return tau_cost + alpha_cost + axis_cost
+        query_cost = self.file_query.weight.square().mean()
+        return tau_cost + alpha_cost + axis_cost + query_cost
