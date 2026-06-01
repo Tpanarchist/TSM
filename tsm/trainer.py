@@ -307,10 +307,14 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                     handle.write(f"- final_reappeared_active_query_file_match_accuracy: {last_metrics['reappeared_active_query_file_candidate_instance_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_active_query_file_hard_match_accuracy: {last_metrics['reappeared_active_query_file_candidate_instance_hard_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_active_query_file_candidate_mean_count: {last_metrics['reappeared_active_query_file_candidate_mean_count']:.3f}\n")
+                    handle.write(f"- final_reappeared_active_query_file_row_coverage: {last_metrics['reappeared_active_query_file_candidate_row_coverage_fraction']:.3f}\n")
+                    handle.write(f"- final_reappeared_active_query_file_target_recall: {last_metrics['reappeared_active_query_file_candidate_target_recall_fraction']:.3f}\n")
                 if "reappeared_learned_active_query_file_candidate_instance_match_accuracy" in last_metrics:
                     handle.write(f"- final_reappeared_learned_active_query_file_match_accuracy: {last_metrics['reappeared_learned_active_query_file_candidate_instance_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_learned_active_query_file_hard_match_accuracy: {last_metrics['reappeared_learned_active_query_file_candidate_instance_hard_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_learned_active_query_file_candidate_mean_count: {last_metrics['reappeared_learned_active_query_file_candidate_mean_count']:.3f}\n")
+                    handle.write(f"- final_reappeared_learned_active_query_file_row_coverage: {last_metrics['reappeared_learned_active_query_file_candidate_row_coverage_fraction']:.3f}\n")
+                    handle.write(f"- final_reappeared_learned_active_query_file_target_recall: {last_metrics['reappeared_learned_active_query_file_candidate_target_recall_fraction']:.3f}\n")
                     handle.write(f"- final_reappeared_learned_active_gate_scaffold_recall: {last_metrics['reappeared_learned_active_file_gate_scaffold_recall']:.3f}\n")
             if "occluded_memory_object_feature_probe_accuracy" in last_metrics:
                 handle.write(f"- final_occluded_memory_object_probe_accuracy: {last_metrics['occluded_memory_object_feature_probe_accuracy']:.3f}\n")

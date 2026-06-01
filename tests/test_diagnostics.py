@@ -174,4 +174,45 @@ def test_candidate_instance_match_diagnostics_limits_lookup_field():
 
     assert metrics["candidate_instance_match_accuracy"].item() == 1.0
     assert metrics["candidate_target_present_fraction"].item() == 1.0
+    assert metrics["candidate_row_coverage_fraction"].item() == 1.0
+    assert metrics["candidate_target_recall_fraction"].item() == 1.0
+    assert metrics["candidate_mean_count"].item() == 1.0
+
+
+def test_candidate_instance_match_diagnostics_reports_empty_rows():
+    source = torch.tensor(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ]
+    )
+    target = torch.tensor(
+        [
+            [0.9, 0.1],
+            [0.0, 1.0],
+        ]
+    )
+    instances = torch.tensor([10, 11])
+    groups = torch.tensor([0, 1])
+    candidate_mask = torch.tensor(
+        [
+            [True, False],
+            [False, False],
+        ]
+    )
+
+    metrics = candidate_instance_match_diagnostics(
+        source,
+        target,
+        instances,
+        instances,
+        groups,
+        groups,
+        candidate_mask,
+    )
+
+    assert metrics["candidate_instance_match_accuracy"].item() == 1.0
+    assert metrics["candidate_target_present_fraction"].item() == 1.0
+    assert metrics["candidate_row_coverage_fraction"].item() == 0.5
+    assert metrics["candidate_target_recall_fraction"].item() == 0.5
     assert metrics["candidate_mean_count"].item() == 1.0

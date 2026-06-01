@@ -187,9 +187,13 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_active_query_file_candidate_instance_match_accuracy",
         "reappeared_active_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_active_query_file_candidate_mean_count",
+        "reappeared_active_query_file_candidate_row_coverage_fraction",
+        "reappeared_active_query_file_candidate_target_recall_fraction",
         "reappeared_learned_active_query_file_candidate_instance_match_accuracy",
         "reappeared_learned_active_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_learned_active_query_file_candidate_mean_count",
+        "reappeared_learned_active_query_file_candidate_row_coverage_fraction",
+        "reappeared_learned_active_query_file_candidate_target_recall_fraction",
         "reappeared_learned_active_file_gate_scaffold_recall",
     }
     assert torch.allclose(out.diagnostics["temporal_visible_fraction"], torch.tensor(0.6), atol=1e-6)

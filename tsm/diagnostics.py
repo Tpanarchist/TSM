@@ -402,6 +402,8 @@ def candidate_instance_match_diagnostics(
             "candidate_instance_hard_valid_fraction": zero,
             "candidate_mean_count": zero,
             "candidate_target_present_fraction": zero,
+            "candidate_row_coverage_fraction": zero,
+            "candidate_target_recall_fraction": zero,
         }
 
     source = source_features.detach()[source_valid].to(dtype)
@@ -415,6 +417,8 @@ def candidate_instance_match_diagnostics(
 
     hits: list[torch.Tensor] = []
     target_present_values: list[torch.Tensor] = []
+    target_recall_values: list[torch.Tensor] = []
+    row_coverage_values: list[torch.Tensor] = []
     candidate_counts: list[torch.Tensor] = []
     same_values: list[torch.Tensor] = []
     other_values: list[torch.Tensor] = []
@@ -423,12 +427,15 @@ def candidate_instance_match_diagnostics(
     hard_other_values: list[torch.Tensor] = []
     for row in range(source.shape[0]):
         row_candidates = candidates[row]
+        has_candidates = row_candidates.any()
+        row_coverage_values.append(has_candidates.to(dtype))
+        same = target_instances == source_instances[row]
+        target_present = same & row_candidates
+        target_recall_values.append(target_present.any().to(dtype))
         if not bool(row_candidates.any().item()):
             continue
         candidate_counts.append(row_candidates.to(dtype).sum())
-        same = target_instances == source_instances[row]
         other = ~same
-        target_present = same & row_candidates
         target_present_values.append(target_present.any().to(dtype))
         masked_distances = distances[row].masked_fill(~row_candidates, float("inf"))
         nearest = masked_distances.argmin()
@@ -450,6 +457,8 @@ def candidate_instance_match_diagnostics(
     zero = _zero(dtype, device)
     accuracy = torch.stack(hits).mean() if hits else zero
     target_present_fraction = torch.stack(target_present_values).mean() if target_present_values else zero
+    target_recall_fraction = torch.stack(target_recall_values).mean() if target_recall_values else zero
+    row_coverage_fraction = torch.stack(row_coverage_values).mean() if row_coverage_values else zero
     candidate_mean_count = torch.stack(candidate_counts).mean() if candidate_counts else zero
     same_distance = torch.stack(same_values).mean() if same_values else zero
     other_distance = torch.stack(other_values).mean() if other_values else zero
@@ -476,6 +485,8 @@ def candidate_instance_match_diagnostics(
         "candidate_instance_hard_valid_fraction": hard_valid_fraction,
         "candidate_mean_count": candidate_mean_count,
         "candidate_target_present_fraction": target_present_fraction,
+        "candidate_row_coverage_fraction": row_coverage_fraction,
+        "candidate_target_recall_fraction": target_recall_fraction,
     }
 
 

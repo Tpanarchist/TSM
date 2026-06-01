@@ -638,10 +638,15 @@ class Self(nn.Module):
                                 <= self.cfg.active_file_candidate_max_age
                             )
                         )
+                        gate_query_scores = target_query_scores
+                        gate_file_scores = target_file_scores
+                        if self.cfg.learned_active_file_gate_detach_inputs:
+                            gate_query_scores = gate_query_scores.detach()
+                            gate_file_scores = gate_file_scores.detach()
                         learned_logits = _active_file_gate_logits(
                             self.active_file_gate,
-                            target_query_scores,
-                            target_file_scores,
+                            gate_query_scores,
+                            gate_file_scores,
                             memory_definition_confidence[reappeared_for_alignment],
                             memory_read.age[reappeared_for_alignment],
                             self.cfg.active_file_candidate_max_age,
@@ -1240,6 +1245,8 @@ class Self(nn.Module):
                         "reappeared_active_query_file_candidate_instance_hard_valid_fraction": _zero_like_scalar(image_t),
                         "reappeared_active_query_file_candidate_mean_count": _zero_like_scalar(image_t),
                         "reappeared_active_query_file_candidate_target_present_fraction": _zero_like_scalar(image_t),
+                        "reappeared_active_query_file_candidate_row_coverage_fraction": _zero_like_scalar(image_t),
+                        "reappeared_active_query_file_candidate_target_recall_fraction": _zero_like_scalar(image_t),
                         "reappeared_learned_active_query_file_candidate_instance_match_accuracy": _zero_like_scalar(image_t),
                         "reappeared_learned_active_query_file_candidate_instance_match_margin": _zero_like_scalar(image_t),
                         "reappeared_learned_active_query_file_candidate_instance_same_distance": _zero_like_scalar(image_t),
@@ -1251,6 +1258,8 @@ class Self(nn.Module):
                         "reappeared_learned_active_query_file_candidate_instance_hard_valid_fraction": _zero_like_scalar(image_t),
                         "reappeared_learned_active_query_file_candidate_mean_count": _zero_like_scalar(image_t),
                         "reappeared_learned_active_query_file_candidate_target_present_fraction": _zero_like_scalar(image_t),
+                        "reappeared_learned_active_query_file_candidate_row_coverage_fraction": _zero_like_scalar(image_t),
+                        "reappeared_learned_active_query_file_candidate_target_recall_fraction": _zero_like_scalar(image_t),
                         "reappeared_learned_active_file_gate_scaffold_precision": _zero_like_scalar(image_t),
                         "reappeared_learned_active_file_gate_scaffold_recall": _zero_like_scalar(image_t),
                         "reappeared_learned_active_file_gate_scaffold_f1": _zero_like_scalar(image_t),

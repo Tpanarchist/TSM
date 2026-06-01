@@ -53,5 +53,6 @@ model:
   active_file_candidate_max_age: 8.0
   active_file_candidate_wrap: true
   learned_active_file_gate_weight: 0.02
-  learned_active_file_gate_topk: 8
+  learned_active_file_gate_topk: 10
   learned_active_file_gate_threshold: 0.5
+  learned_active_file_gate_detach_inputs: true

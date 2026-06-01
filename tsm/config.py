@@ -51,6 +51,7 @@ class TsmConfig:
     learned_active_file_gate_weight: float = 0.0
     learned_active_file_gate_topk: int = 8
     learned_active_file_gate_threshold: float = 0.5
+    learned_active_file_gate_detach_inputs: bool = True
 
 
 @dataclass
