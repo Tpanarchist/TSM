@@ -43,6 +43,7 @@ def _cmd_axis_report(args: argparse.Namespace) -> None:
         split=args.split,
         limit=args.limit,
         min_usage=args.min_usage,
+        label_key=args.label_key,
     )
     print(path)
 
@@ -107,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     axis_cmd.add_argument("--split", default="test")
     axis_cmd.add_argument("--limit", type=int)
     axis_cmd.add_argument("--min-usage", type=float, default=1e-6)
+    axis_cmd.add_argument("--label-key", default="mode")
     axis_cmd.set_defaults(func=_cmd_axis_report)
 
     sweep_cmd = sub.add_parser("seed-sweep")

@@ -231,6 +231,27 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                 handle.write(f"- final_ternary_context_mutual_information: {last_metrics['ternary_context_mutual_information']:.3f}\n")
                 handle.write(f"- final_ternary_axis_usage_count: {last_metrics['ternary_axis_usage_count']:.1f}\n")
                 handle.write(f"- final_ternary_axis_stability: {last_metrics['ternary_axis_stability']:.3f}\n")
+            if "temporal_visible_fraction" in last_metrics:
+                handle.write(f"- final_temporal_visible_fraction: {last_metrics['temporal_visible_fraction']:.3f}\n")
+                handle.write(f"- final_temporal_occluded_fraction: {last_metrics['temporal_occluded_fraction']:.3f}\n")
+                handle.write(f"- final_temporal_reappeared_fraction: {last_metrics['temporal_reappeared_fraction']:.3f}\n")
+                handle.write(f"- final_temporal_sae_occlusion_delta: {last_metrics['temporal_sae_occlusion_delta']:.6f}\n")
+                handle.write(f"- final_temporal_prediction_visible_mean: {last_metrics['temporal_prediction_visible_mean']:.6f}\n")
+                handle.write(f"- final_temporal_prediction_occluded_mean: {last_metrics['temporal_prediction_occluded_mean']:.6f}\n")
+                handle.write(f"- final_temporal_prediction_reappeared_mean: {last_metrics['temporal_prediction_reappeared_mean']:.6f}\n")
+                handle.write(f"- final_temporal_context_visible_used_count: {last_metrics['temporal_context_visible_used_count']:.1f}\n")
+                handle.write(f"- final_temporal_context_occluded_used_count: {last_metrics['temporal_context_occluded_used_count']:.1f}\n")
+            if "phase_ternary_mode_probe_accuracy" in last_metrics:
+                handle.write(f"- final_phase_ternary_probe_accuracy: {last_metrics['phase_ternary_mode_probe_accuracy']:.3f}\n")
+                handle.write(f"- final_phase_ternary_mode_mutual_information: {last_metrics['phase_ternary_mode_mutual_information']:.3f}\n")
+                handle.write(f"- final_phase_ternary_axis_usage_count: {last_metrics['phase_ternary_axis_usage_count']:.1f}\n")
+            if "object_ternary_mode_probe_accuracy" in last_metrics:
+                handle.write(f"- final_object_ternary_probe_accuracy: {last_metrics['object_ternary_mode_probe_accuracy']:.3f}\n")
+                handle.write(f"- final_object_ternary_mode_mutual_information: {last_metrics['object_ternary_mode_mutual_information']:.3f}\n")
+                handle.write(f"- final_object_context_consistency: {last_metrics['object_mode_context_consistency']:.3f}\n")
+            if "occluded_object_ternary_mode_probe_accuracy" in last_metrics:
+                handle.write(f"- final_occluded_object_ternary_probe_accuracy: {last_metrics['occluded_object_ternary_mode_probe_accuracy']:.3f}\n")
+                handle.write(f"- final_occluded_object_ternary_mode_mutual_information: {last_metrics['occluded_object_ternary_mode_mutual_information']:.3f}\n")
             if "definition_hardened_count" in last_metrics:
                 handle.write(f"- final_definition_candidate_count: {last_metrics['definition_candidate_count']:.1f}\n")
                 handle.write(f"- final_definition_hardened_count: {last_metrics['definition_hardened_count']:.1f}\n")
@@ -283,6 +304,7 @@ def axis_report(
     split: str = "test",
     limit: int | None = None,
     min_usage: float = 1e-6,
+    label_key: str = "mode",
 ) -> Path:
     device = resolve_device(device_name)
     model, cfg, _payload = load_model_from_checkpoint(checkpoint, device)
@@ -301,8 +323,13 @@ def axis_report(
     for batch in tqdm(loader, desc="axis-report", unit="batch"):
         batch = move_batch(batch, device)
         output = model.forward_train(batch, include_label_diagnostics=False)
+        labels = batch.get(label_key)
+        if labels is None and label_key == "mode":
+            labels = batch.get("label")
+        if labels is None:
+            raise KeyError(f"batch does not contain label key {label_key!r}")
         ternary_chunks.append(output.ternary.detach().cpu())
-        mode_chunks.append(batch.get("mode", batch.get("label")).detach().cpu())
+        mode_chunks.append(labels.detach().cpu())
         context_chunks.append(output.context.probs.argmax(dim=-1).detach().cpu())
     if not ternary_chunks:
         raise RuntimeError("axis report has no batches to inspect")
@@ -318,6 +345,7 @@ def axis_report(
     report = {
         "checkpoint": str(checkpoint),
         "split": split,
+        "label_key": label_key,
         "rows": int(ternary.shape[0]),
         "min_usage": min_usage,
         "diagnostics": diagnostics,
@@ -325,7 +353,8 @@ def axis_report(
     }
     if out_path is None:
         checkpoint_path = Path(checkpoint)
-        out_path = checkpoint_path.parent.parent / f"axis_specialization_{split}.json"
+        suffix = "" if label_key == "mode" else f"_{label_key.replace('/', '_')}"
+        out_path = checkpoint_path.parent.parent / f"axis_specialization{suffix}_{split}.json"
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as handle:

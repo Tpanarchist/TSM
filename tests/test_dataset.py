@@ -2,7 +2,7 @@ from PIL import Image
 import torch
 
 from tsm.config import DatasetConfig, TsmConfig
-from tsm.data import ImageStreamDataset, MultiModeSyntheticImageStreamDataset
+from tsm.data import ImageStreamDataset, MultiModeSyntheticImageStreamDataset, TemporalObjectPermanenceDataset, make_dataset
 
 
 def test_image_stream_dataset_uses_mock_rows_without_network():
@@ -40,3 +40,29 @@ def test_multimode_synthetic_test_split_uses_heldout_variants():
 
     assert torch.equal(train[1]["image_t"], heldout[1]["image_t"])
     assert not torch.equal(train[1]["image_tp1"], heldout[1]["image_tp1"])
+
+
+def test_temporal_object_dataset_exposes_occlusion_phases():
+    cfg = TsmConfig(d_model=16, image_size=28, image_channels=1)
+    ds = TemporalObjectPermanenceDataset(cfg, length=10, seed=13)
+
+    modes = [ds[i]["mode"].item() for i in range(5)]
+    visible = [ds[i]["visible_t"].item() for i in range(5)]
+    occluded = [ds[i]["occluded_t"].item() for i in range(5)]
+
+    assert modes == [0, 1, 2, 2, 3]
+    assert visible == [1.0, 1.0, 1.0, 0.0, 0.0]
+    assert occluded == [0.0, 0.0, 0.0, 1.0, 1.0]
+    assert ds[2]["unexpected_disappearance"].item() == 1.0
+    assert ds[4]["visible_tp1"].item() == 1.0
+    assert ds[4]["identity_preserved"].item() == 1.0
+    assert ds[0]["image_t"].shape == (1, 28, 28)
+    assert ds[0]["object_position_t"].shape == (2,)
+
+
+def test_make_dataset_supports_temporal_object_alias():
+    cfg = TsmConfig(d_model=16, image_size=28, image_channels=1)
+    ds = make_dataset(DatasetConfig(name="object_permanence", split="train", limit=7, seed=3), cfg)
+
+    assert isinstance(ds, TemporalObjectPermanenceDataset)
+    assert len(ds) == 7

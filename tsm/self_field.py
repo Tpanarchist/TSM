@@ -63,6 +63,29 @@ def _mode_context_stats(
     }
 
 
+def _prefix_metrics(prefix: str, metrics: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    return {f"{prefix}{key}": value for key, value in metrics.items()}
+
+
+def _masked_mean(values: torch.Tensor, mask: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    mask = mask.to(device=values.device).bool()
+    if not bool(mask.any().item()):
+        return torch.zeros((), dtype=dtype, device=values.device)
+    return values[mask].mean()
+
+
+def _masked_context_used(
+    context_hard: torch.Tensor,
+    mask: torch.Tensor,
+    context_count: int,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    mask = mask.to(device=context_hard.device).bool()
+    if not bool(mask.any().item()):
+        return torch.zeros((), dtype=dtype, device=context_hard.device)
+    return torch.bincount(context_hard[mask], minlength=context_count).gt(0).to(dtype).sum()
+
+
 class Self(nn.Module):
     def __init__(self, cfg: TsmConfig | None = None) -> None:
         super().__init__()
@@ -126,6 +149,10 @@ class Self(nn.Module):
         context_used = torch.bincount(context_hard, minlength=self.cfg.contexts).gt(0).float().sum()
         context_entropy_value = context_entropy(context.probs)
         context_balance_value = context_balance_loss(context.probs)
+        prediction_error_per_sample = (next_image - image_tp1).square().flatten(1).mean(dim=1)
+        reconstruction_error_per_sample = (recon - image_t).square().flatten(1).mean(dim=1)
+        severity_per_sample = sae.severity.mean(dim=1)
+        coherence_per_sample = sae.coherence.mean(dim=1)
         losses = {
             "reconstruction": F.mse_loss(recon, image_t),
             "prediction": F.mse_loss(next_image, image_tp1),
@@ -176,6 +203,151 @@ class Self(nn.Module):
             )
             if include_label_diagnostics:
                 diagnostics.update(ternary_label_diagnostics(ternary, mode, context_hard))
+        if "phase" in batch:
+            phase = batch["phase"].to(device=image_t.device, dtype=torch.long)
+            diagnostics.update(_prefix_metrics(
+                "phase_",
+                _mode_context_stats(
+                    phase,
+                    context_hard,
+                    self.cfg.contexts,
+                    image_t.dtype,
+                ),
+            ))
+            diagnostics["phase_count"] = torch.tensor(
+                phase[phase >= 0].unique().numel(),
+                dtype=image_t.dtype,
+                device=image_t.device,
+            )
+            if include_label_diagnostics:
+                diagnostics.update(_prefix_metrics(
+                    "phase_",
+                    ternary_label_diagnostics(ternary, phase, context_hard),
+                ))
+        if "object_id" in batch:
+            object_id = batch["object_id"].to(device=image_t.device, dtype=torch.long)
+            diagnostics.update(_prefix_metrics(
+                "object_",
+                _mode_context_stats(
+                    object_id,
+                    context_hard,
+                    self.cfg.contexts,
+                    image_t.dtype,
+                ),
+            ))
+            diagnostics["object_count"] = torch.tensor(
+                object_id[object_id >= 0].unique().numel(),
+                dtype=image_t.dtype,
+                device=image_t.device,
+            )
+            if include_label_diagnostics:
+                diagnostics.update(_prefix_metrics(
+                    "object_",
+                    ternary_label_diagnostics(ternary, object_id, context_hard),
+                ))
+        if "visible_t" in batch and "occluded_t" in batch:
+            visible_t = batch["visible_t"].to(device=image_t.device, dtype=image_t.dtype)
+            occluded_t = batch["occluded_t"].to(device=image_t.device, dtype=image_t.dtype)
+            visible_tp1 = batch.get("visible_tp1", torch.zeros_like(visible_t)).to(device=image_t.device, dtype=image_t.dtype)
+            occluded_tp1 = batch.get("occluded_tp1", torch.zeros_like(occluded_t)).to(device=image_t.device, dtype=image_t.dtype)
+            moved = batch.get("moved", torch.zeros_like(visible_t)).to(device=image_t.device, dtype=image_t.dtype)
+            identity_preserved = batch.get("identity_preserved", torch.zeros_like(visible_t)).to(
+                device=image_t.device,
+                dtype=image_t.dtype,
+            )
+            unexpected_disappearance = batch.get("unexpected_disappearance", torch.zeros_like(visible_t)).to(
+                device=image_t.device,
+                dtype=image_t.dtype,
+            )
+            reappeared = (occluded_t > 0.5) & (visible_tp1 > 0.5)
+            visible_mask = visible_t > 0.5
+            occluded_mask = occluded_t > 0.5
+            moved_mask = moved > 0.5
+            disappearance_mask = unexpected_disappearance > 0.5
+            diagnostics.update({
+                "temporal_visible_fraction": visible_t.mean(),
+                "temporal_occluded_fraction": occluded_t.mean(),
+                "temporal_moved_fraction": moved.mean(),
+                "temporal_identity_preserved_fraction": identity_preserved.mean(),
+                "temporal_unexpected_disappearance_fraction": unexpected_disappearance.mean(),
+                "temporal_reappeared_fraction": reappeared.to(image_t.dtype).mean(),
+                "temporal_visible_tp1_fraction": visible_tp1.mean(),
+                "temporal_occluded_tp1_fraction": occluded_tp1.mean(),
+                "temporal_context_visible_used_count": _masked_context_used(
+                    context_hard,
+                    visible_mask,
+                    self.cfg.contexts,
+                    image_t.dtype,
+                ),
+                "temporal_context_occluded_used_count": _masked_context_used(
+                    context_hard,
+                    occluded_mask,
+                    self.cfg.contexts,
+                    image_t.dtype,
+                ),
+                "temporal_sae_visible_mean": _masked_mean(severity_per_sample, visible_mask, image_t.dtype),
+                "temporal_sae_occluded_mean": _masked_mean(severity_per_sample, occluded_mask, image_t.dtype),
+                "temporal_sae_moved_mean": _masked_mean(severity_per_sample, moved_mask, image_t.dtype),
+                "temporal_sae_disappearance_mean": _masked_mean(
+                    severity_per_sample,
+                    disappearance_mask,
+                    image_t.dtype,
+                ),
+                "temporal_sae_reappeared_mean": _masked_mean(severity_per_sample, reappeared, image_t.dtype),
+                "temporal_coherence_visible_mean": _masked_mean(coherence_per_sample, visible_mask, image_t.dtype),
+                "temporal_coherence_occluded_mean": _masked_mean(coherence_per_sample, occluded_mask, image_t.dtype),
+                "temporal_prediction_visible_mean": _masked_mean(
+                    prediction_error_per_sample,
+                    visible_mask,
+                    image_t.dtype,
+                ),
+                "temporal_prediction_occluded_mean": _masked_mean(
+                    prediction_error_per_sample,
+                    occluded_mask,
+                    image_t.dtype,
+                ),
+                "temporal_prediction_moved_mean": _masked_mean(
+                    prediction_error_per_sample,
+                    moved_mask,
+                    image_t.dtype,
+                ),
+                "temporal_prediction_disappearance_mean": _masked_mean(
+                    prediction_error_per_sample,
+                    disappearance_mask,
+                    image_t.dtype,
+                ),
+                "temporal_prediction_reappeared_mean": _masked_mean(
+                    prediction_error_per_sample,
+                    reappeared,
+                    image_t.dtype,
+                ),
+                "temporal_reconstruction_visible_mean": _masked_mean(
+                    reconstruction_error_per_sample,
+                    visible_mask,
+                    image_t.dtype,
+                ),
+                "temporal_reconstruction_occluded_mean": _masked_mean(
+                    reconstruction_error_per_sample,
+                    occluded_mask,
+                    image_t.dtype,
+                ),
+            })
+            diagnostics["temporal_sae_occlusion_delta"] = (
+                diagnostics["temporal_sae_occluded_mean"] - diagnostics["temporal_sae_visible_mean"]
+            )
+            diagnostics["temporal_prediction_occlusion_delta"] = (
+                diagnostics["temporal_prediction_occluded_mean"] - diagnostics["temporal_prediction_visible_mean"]
+            )
+            if include_label_diagnostics and "object_id" in batch and bool(occluded_mask.any().item()):
+                object_id = batch["object_id"].to(device=image_t.device, dtype=torch.long)
+                diagnostics.update(_prefix_metrics(
+                    "occluded_object_",
+                    ternary_label_diagnostics(
+                        ternary[occluded_mask],
+                        object_id[occluded_mask],
+                        context_hard[occluded_mask],
+                    ),
+                ))
         total = (
             self.cfg.recon_weight * losses["reconstruction"]
             + self.cfg.pred_weight * losses["prediction"]

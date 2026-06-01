@@ -90,3 +90,51 @@ def test_tick_has_no_embodiment_action():
 
     assert out.action is None
     assert out.context_probs.shape == (1, 3)
+
+
+def test_forward_train_reports_temporal_object_diagnostics():
+    cfg = TsmConfig(
+        d_model=32,
+        workspace_latents=8,
+        contexts=4,
+        definitions_per_context=4,
+        image_size=16,
+        image_channels=1,
+        patch_size=4,
+        attention_heads=4,
+        inference_steps=1,
+    )
+    model = Self(cfg)
+    batch = {
+        "image_t": torch.rand(5, 1, 16, 16),
+        "image_tp1": torch.rand(5, 1, 16, 16),
+        "dataset_id": torch.zeros(5, dtype=torch.long),
+        "mode": torch.tensor([0, 1, 2, 2, 3], dtype=torch.long),
+        "phase": torch.tensor([0, 1, 2, 3, 4], dtype=torch.long),
+        "object_id": torch.tensor([0, 1, 2, 3, 0], dtype=torch.long),
+        "visible_t": torch.tensor([1, 1, 1, 0, 0], dtype=torch.float32),
+        "visible_tp1": torch.tensor([1, 1, 0, 0, 1], dtype=torch.float32),
+        "occluded_t": torch.tensor([0, 0, 0, 1, 1], dtype=torch.float32),
+        "occluded_tp1": torch.tensor([0, 0, 1, 1, 0], dtype=torch.float32),
+        "moved": torch.tensor([0, 1, 0, 0, 0], dtype=torch.float32),
+        "identity_preserved": torch.ones(5),
+        "unexpected_disappearance": torch.tensor([0, 0, 1, 0, 0], dtype=torch.float32),
+    }
+
+    out = model.forward_train(batch)
+
+    assert set(out.diagnostics) >= {
+        "phase_ternary_mode_probe_accuracy",
+        "object_ternary_mode_probe_accuracy",
+        "occluded_object_ternary_mode_probe_accuracy",
+        "temporal_visible_fraction",
+        "temporal_occluded_fraction",
+        "temporal_reappeared_fraction",
+        "temporal_sae_occlusion_delta",
+        "temporal_prediction_occluded_mean",
+        "temporal_prediction_visible_mean",
+        "temporal_context_occluded_used_count",
+        "temporal_context_visible_used_count",
+    }
+    assert torch.allclose(out.diagnostics["temporal_visible_fraction"], torch.tensor(0.6), atol=1e-6)
+    assert torch.allclose(out.diagnostics["temporal_occluded_fraction"], torch.tensor(0.4), atol=1e-6)
