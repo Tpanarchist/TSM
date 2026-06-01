@@ -139,9 +139,16 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "temporal_context_visible_used_count",
         "temporal_memory_occluded_hit_fraction",
         "memory_condition_norm",
+        "memory_definition_condition_norm",
+        "memory_definition_flip_fraction",
         "memory_prediction_occluded_impact_mean",
+        "memory_total_prediction_occluded_impact_mean",
+        "memory_definition_prediction_occluded_impact_mean",
+        "temporal_memory_definition_occluded_flip_fraction",
         "memory_object_feature_probe_accuracy",
         "occluded_memory_object_feature_probe_accuracy",
+        "occluded_base_ternary_mode_probe_accuracy",
+        "occluded_memory_definition_object_probe_delta",
     }
     assert torch.allclose(out.diagnostics["temporal_visible_fraction"], torch.tensor(0.6), atol=1e-6)
     assert torch.allclose(out.diagnostics["temporal_occluded_fraction"], torch.tensor(0.4), atol=1e-6)

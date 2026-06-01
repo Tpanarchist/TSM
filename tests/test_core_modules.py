@@ -2,6 +2,7 @@ import torch
 
 from tsm.config import TsmConfig
 from tsm.context import ContextRouter
+from tsm.definitions import DefinitionBank
 from tsm.gate import MutationGate
 from tsm.memory import Memory
 from tsm.sae import SAE
@@ -67,3 +68,31 @@ def test_memory_reads_prior_visible_object_trace_in_batch_order():
     assert torch.allclose(read.feature[1], feature[0])
     assert torch.allclose(read.feature[2], feature[0])
     assert read.confidence[1].item() == 1.0
+
+
+def test_definition_bank_can_project_memory_trace():
+    cfg = TsmConfig(
+        d_model=4,
+        workspace_latents=2,
+        contexts=1,
+        definitions_per_context=2,
+        attention_heads=1,
+        memory_definition_scale=1.0,
+    )
+    bank = DefinitionBank(cfg)
+    with torch.no_grad():
+        bank.axes.zero_()
+        bank.memory_axes.zero_()
+        bank.memory_axes[0, 0, 0] = 1.0
+        bank.log_tau.fill_(-4.0)
+        bank.log_alpha.zero_()
+    eps = torch.zeros(1, 2, 4)
+    ctx = torch.ones(1, 1)
+    memory_feature = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+    memory_confidence = torch.ones(1, 1)
+
+    base = bank.project(eps, ctx)
+    conditioned = bank.project(eps, ctx, memory_feature, memory_confidence)
+
+    assert base[0, 0].item() == 0.0
+    assert conditioned[0, 0].item() > 0.0

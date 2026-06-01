@@ -245,7 +245,11 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                 handle.write(f"- final_temporal_memory_occluded_hit_fraction: {last_metrics['temporal_memory_occluded_hit_fraction']:.3f}\n")
                 handle.write(f"- final_temporal_memory_occluded_confidence_mean: {last_metrics['temporal_memory_occluded_confidence_mean']:.3f}\n")
                 handle.write(f"- final_memory_prediction_occluded_impact_mean: {last_metrics['memory_prediction_occluded_impact_mean']:.6f}\n")
+                handle.write(f"- final_memory_total_prediction_occluded_impact_mean: {last_metrics['memory_total_prediction_occluded_impact_mean']:.6f}\n")
+                handle.write(f"- final_memory_definition_prediction_occluded_impact_mean: {last_metrics['memory_definition_prediction_occluded_impact_mean']:.6f}\n")
                 handle.write(f"- final_memory_condition_norm: {last_metrics['memory_condition_norm']:.6f}\n")
+                handle.write(f"- final_memory_definition_condition_norm: {last_metrics['memory_definition_condition_norm']:.6f}\n")
+                handle.write(f"- final_temporal_memory_definition_occluded_flip_fraction: {last_metrics['temporal_memory_definition_occluded_flip_fraction']:.3f}\n")
             if "phase_ternary_mode_probe_accuracy" in last_metrics:
                 handle.write(f"- final_phase_ternary_probe_accuracy: {last_metrics['phase_ternary_mode_probe_accuracy']:.3f}\n")
                 handle.write(f"- final_phase_ternary_mode_mutual_information: {last_metrics['phase_ternary_mode_mutual_information']:.3f}\n")
@@ -260,6 +264,9 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
             if "occluded_object_ternary_mode_probe_accuracy" in last_metrics:
                 handle.write(f"- final_occluded_object_ternary_probe_accuracy: {last_metrics['occluded_object_ternary_mode_probe_accuracy']:.3f}\n")
                 handle.write(f"- final_occluded_object_ternary_mode_mutual_information: {last_metrics['occluded_object_ternary_mode_mutual_information']:.3f}\n")
+            if "occluded_base_ternary_mode_probe_accuracy" in last_metrics:
+                handle.write(f"- final_occluded_base_ternary_probe_accuracy: {last_metrics['occluded_base_ternary_mode_probe_accuracy']:.3f}\n")
+                handle.write(f"- final_occluded_memory_definition_object_probe_delta: {last_metrics['occluded_memory_definition_object_probe_delta']:.3f}\n")
             if "occluded_memory_object_feature_probe_accuracy" in last_metrics:
                 handle.write(f"- final_occluded_memory_object_probe_accuracy: {last_metrics['occluded_memory_object_feature_probe_accuracy']:.3f}\n")
                 handle.write(f"- final_occluded_memory_object_centroid_separation: {last_metrics['occluded_memory_object_feature_centroid_separation']:.3f}\n")

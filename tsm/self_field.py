@@ -138,8 +138,6 @@ class Self(nn.Module):
             drives,
             context.probs,
         )
-        ternary = self.defs.project(sae.eps, context.probs)
-        ternary_condition = ternary if self.cfg.use_ternary_conditioning else None
         memory_read = self.memory.read_write_object_files(
             batch,
             perception.latents.mean(dim=1),
@@ -153,6 +151,11 @@ class Self(nn.Module):
             memory_prediction_confidence = memory_prediction_confidence * occluded_gate
         if not self.cfg.use_memory_conditioning:
             memory_prediction_confidence = torch.zeros_like(memory_prediction_confidence)
+        memory_definition_confidence = memory_prediction_confidence if self.cfg.use_ternary_conditioning else torch.zeros_like(memory_prediction_confidence)
+        ternary_base = self.defs.project(sae.eps, context.probs)
+        ternary = self.defs.project(sae.eps, context.probs, memory_feature, memory_definition_confidence)
+        ternary_condition = ternary if self.cfg.use_ternary_conditioning else None
+        ternary_base_condition = ternary_base if self.cfg.use_ternary_conditioning else None
         recon = self.reality.reconstruct_image(q, ternary_condition)
         next_image = self.reality.predict_next_image(
             q,
@@ -164,6 +167,8 @@ class Self(nn.Module):
         prior = self.reality.context_prior(context.probs)
         free_energy = variational_free_energy(sae.raw, sae.precision, q, prior)
         ternary_nonzero = ternary.ne(0)
+        ternary_base_nonzero = ternary_base.ne(0)
+        memory_definition_flip = ternary.ne(ternary_base)
         context_hard = context.probs.argmax(dim=-1)
         context_used = torch.bincount(context_hard, minlength=self.cfg.contexts).gt(0).float().sum()
         context_entropy_value = context_entropy(context.probs)
@@ -190,8 +195,16 @@ class Self(nn.Module):
             "ternary_nonzero_fraction": ternary_nonzero.float().mean(),
             "ternary_positive_fraction": ternary.gt(0).float().mean(),
             "ternary_negative_fraction": ternary.lt(0).float().mean(),
+            "memory_definition_flip_fraction": memory_definition_flip.to(image_t.dtype).mean(),
+            "memory_definition_activation_delta": (
+                ternary_nonzero.to(image_t.dtype).mean() - ternary_base_nonzero.to(image_t.dtype).mean()
+            ),
             "ternary_condition_norm": (
                 self.reality.condition_latents(q, ternary_condition) - q
+            ).detach().norm(dim=-1).mean(),
+            "memory_definition_condition_norm": (
+                self.reality.condition_latents(q, ternary_condition)
+                - self.reality.condition_latents(q, ternary_base_condition)
             ).detach().norm(dim=-1).mean(),
             "memory_condition_norm": (
                 self.reality.condition_latents(q, ternary_condition, memory_feature, memory_prediction_confidence)
@@ -349,6 +362,17 @@ class Self(nn.Module):
                     occluded_mask,
                     image_t.dtype,
                 ),
+                "temporal_memory_definition_occluded_flip_fraction": _masked_mean(
+                    memory_definition_flip.to(image_t.dtype).mean(dim=1),
+                    occluded_mask,
+                    image_t.dtype,
+                ),
+                "temporal_memory_definition_occluded_activation_delta": _masked_mean(
+                    ternary_nonzero.to(image_t.dtype).mean(dim=1)
+                    - ternary_base_nonzero.to(image_t.dtype).mean(dim=1),
+                    occluded_mask,
+                    image_t.dtype,
+                ),
                 "temporal_sae_visible_mean": _masked_mean(severity_per_sample, visible_mask, image_t.dtype),
                 "temporal_sae_occluded_mean": _masked_mean(severity_per_sample, occluded_mask, image_t.dtype),
                 "temporal_sae_moved_mean": _masked_mean(severity_per_sample, moved_mask, image_t.dtype),
@@ -404,8 +428,12 @@ class Self(nn.Module):
             )
             with torch.no_grad():
                 next_without_memory = self.reality.predict_next_image(q, context.embedding, ternary_condition)
+                next_without_any_memory = self.reality.predict_next_image(q, context.embedding, ternary_base_condition)
                 no_memory_error = (next_without_memory - image_tp1).square().flatten(1).mean(dim=1)
+                no_any_memory_error = (next_without_any_memory - image_tp1).square().flatten(1).mean(dim=1)
                 memory_impact = no_memory_error - prediction_error_per_sample.detach()
+                memory_total_impact = no_any_memory_error - prediction_error_per_sample.detach()
+                memory_definition_impact = no_any_memory_error - no_memory_error
             diagnostics.update({
                 "memory_prediction_impact_mean": memory_impact.mean(),
                 "memory_prediction_occluded_impact_mean": _masked_mean(memory_impact, occluded_mask, image_t.dtype),
@@ -413,6 +441,28 @@ class Self(nn.Module):
                 "memory_prediction_disappearance_impact_mean": _masked_mean(
                     memory_impact,
                     disappearance_mask,
+                    image_t.dtype,
+                ),
+                "memory_total_prediction_impact_mean": memory_total_impact.mean(),
+                "memory_total_prediction_occluded_impact_mean": _masked_mean(
+                    memory_total_impact,
+                    occluded_mask,
+                    image_t.dtype,
+                ),
+                "memory_total_prediction_reappeared_impact_mean": _masked_mean(
+                    memory_total_impact,
+                    reappeared,
+                    image_t.dtype,
+                ),
+                "memory_definition_prediction_impact_mean": memory_definition_impact.mean(),
+                "memory_definition_prediction_occluded_impact_mean": _masked_mean(
+                    memory_definition_impact,
+                    occluded_mask,
+                    image_t.dtype,
+                ),
+                "memory_definition_prediction_reappeared_impact_mean": _masked_mean(
+                    memory_definition_impact,
+                    reappeared,
                     image_t.dtype,
                 ),
             })
@@ -426,6 +476,18 @@ class Self(nn.Module):
                         context_hard[occluded_mask],
                     ),
                 ))
+                diagnostics.update(_prefix_metrics(
+                    "occluded_base_",
+                    ternary_label_diagnostics(
+                        ternary_base[occluded_mask],
+                        object_id[occluded_mask],
+                        context_hard[occluded_mask],
+                    ),
+                ))
+                diagnostics["occluded_memory_definition_object_probe_delta"] = (
+                    diagnostics["occluded_object_ternary_mode_probe_accuracy"]
+                    - diagnostics["occluded_base_ternary_mode_probe_accuracy"]
+                )
                 occluded_active = occluded_mask & memory_read.hit.to(device=image_t.device)
                 if bool(occluded_active.any().item()):
                     diagnostics.update(_prefix_metrics(

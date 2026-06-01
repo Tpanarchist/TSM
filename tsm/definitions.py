@@ -28,6 +28,7 @@ class DefinitionBank(nn.Module):
         self.cfg = cfg
         scale = cfg.d_model**-0.5
         self.axes = nn.Parameter(torch.randn(cfg.contexts, cfg.definitions_per_context, cfg.d_model) * scale)
+        self.memory_axes = nn.Parameter(torch.randn(cfg.contexts, cfg.definitions_per_context, cfg.d_model) * scale)
         self.log_tau = nn.Parameter(torch.full((cfg.contexts, cfg.definitions_per_context), -2.0))
         self.log_alpha = nn.Parameter(torch.zeros(cfg.contexts, cfg.definitions_per_context))
         self.records = [
@@ -36,14 +37,37 @@ class DefinitionBank(nn.Module):
             for j in range(cfg.definitions_per_context)
         ]
 
-    def forward(self, eps: torch.Tensor, ctx_probs: torch.Tensor) -> torch.Tensor:
-        return self.project(eps, ctx_probs)
+    def forward(
+        self,
+        eps: torch.Tensor,
+        ctx_probs: torch.Tensor,
+        memory_feature: torch.Tensor | None = None,
+        memory_confidence: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return self.project(eps, ctx_probs, memory_feature, memory_confidence)
 
-    def project(self, eps: torch.Tensor, ctx_probs: torch.Tensor) -> torch.Tensor:
+    def project(
+        self,
+        eps: torch.Tensor,
+        ctx_probs: torch.Tensor,
+        memory_feature: torch.Tensor | None = None,
+        memory_confidence: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         pooled = eps.mean(dim=1)
         axes = F.normalize(self.axes, dim=-1)
         per_ctx = torch.einsum("bd,kjd->bkj", pooled, axes)
         raw = torch.einsum("bk,bkj->bj", ctx_probs, per_ctx)
+        if memory_feature is not None and self.cfg.use_memory_conditioning:
+            confidence = memory_confidence if memory_confidence is not None else torch.ones(
+                memory_feature.shape[0],
+                1,
+                dtype=memory_feature.dtype,
+                device=memory_feature.device,
+            )
+            memory_axes = F.normalize(self.memory_axes, dim=-1)
+            memory_per_ctx = torch.einsum("bd,kjd->bkj", memory_feature, memory_axes)
+            memory_raw = torch.einsum("bk,bkj->bj", ctx_probs, memory_per_ctx)
+            raw = raw + self.cfg.memory_definition_scale * confidence.clamp(0.0, 1.0) * memory_raw
         tau = torch.einsum("bk,kj->bj", ctx_probs, self.log_tau.exp())
         alpha = torch.einsum("bk,kj->bj", ctx_probs, self.log_alpha.exp())
         return TernaryProject.apply(raw, tau, alpha)
@@ -51,5 +75,5 @@ class DefinitionBank(nn.Module):
     def bit_cost(self) -> torch.Tensor:
         tau_cost = self.log_tau.exp().reciprocal().mean()
         alpha_cost = self.log_alpha.exp().mean()
-        axis_cost = self.axes.square().mean()
+        axis_cost = self.axes.square().mean() + self.memory_axes.square().mean()
         return tau_cost + alpha_cost + axis_cost

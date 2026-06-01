@@ -37,3 +37,4 @@ model:
   ternary_condition_scale: 0.25
   use_memory_conditioning: false
   memory_condition_scale: 0.2
+  memory_definition_scale: 0.75
