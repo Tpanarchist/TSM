@@ -204,7 +204,81 @@ def _active_file_gate_input_dim(cfg: TsmConfig) -> int:
 
 
 def _active_file_expectation_input_dim(cfg: TsmConfig) -> int:
-    return cfg.definitions_per_context + cfg.contexts + 2
+    dim = cfg.definitions_per_context + cfg.contexts + 2
+    if cfg.active_file_expectation_trajectory_features:
+        dim += 13 + 2 * cfg.active_file_expectation_phase_count
+    return dim
+
+
+def _active_file_trajectory_features(
+    batch: dict[str, torch.Tensor],
+    memory_read,
+    mask: torch.Tensor,
+    cfg: TsmConfig,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> torch.Tensor:
+    count = int(mask.to(torch.long).sum().item())
+    width = 13 + 2 * cfg.active_file_expectation_phase_count
+    if count == 0:
+        return torch.zeros((0, width), dtype=dtype, device=device)
+    position = memory_read.position[mask].to(device=device, dtype=dtype)
+    velocity = memory_read.velocity[mask].to(device=device, dtype=dtype)
+    position_valid = memory_read.position_valid[mask].to(device=device, dtype=dtype).unsqueeze(-1)
+    velocity_valid = memory_read.velocity_valid[mask].to(device=device, dtype=dtype).unsqueeze(-1)
+    scale = float(max(1, cfg.image_size))
+    projected = position + velocity
+    wrap_span = _active_file_wrap_span(cfg)
+    if wrap_span is not None and wrap_span > 0:
+        margin = float(max(4, cfg.image_size // 7))
+        projected = ((projected - margin) % float(wrap_span)) + margin
+    velocity_mag = velocity.norm(dim=-1, keepdim=True) / scale
+    base = [
+        position / scale,
+        velocity / scale,
+        projected / scale,
+        velocity_mag,
+        position_valid,
+        velocity_valid,
+    ]
+    phase_count = cfg.active_file_expectation_phase_count
+    if "phase" in batch and phase_count > 0:
+        phase = batch["phase"][mask].to(device=device, dtype=torch.long).clamp_min(0) % phase_count
+        phase_onehot = F.one_hot(phase, num_classes=phase_count).to(dtype)
+        next_phase = (phase + 1) % phase_count
+        next_phase_onehot = F.one_hot(next_phase, num_classes=phase_count).to(dtype)
+    else:
+        phase_onehot = torch.zeros((count, phase_count), dtype=dtype, device=device)
+        next_phase_onehot = torch.zeros((count, phase_count), dtype=dtype, device=device)
+    flags = []
+    for key in ("visible_t", "occluded_t", "visible_tp1", "occluded_tp1"):
+        value = batch.get(key)
+        if torch.is_tensor(value):
+            flags.append(value[mask].to(device=device, dtype=dtype).unsqueeze(-1))
+        else:
+            flags.append(torch.zeros((count, 1), dtype=dtype, device=device))
+    return torch.cat([*base, phase_onehot, next_phase_onehot, *flags], dim=-1)
+
+
+def _active_file_projected_position(
+    memory_read,
+    mask: torch.Tensor,
+    cfg: TsmConfig,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    count = int(mask.to(torch.long).sum().item())
+    if count == 0:
+        return torch.zeros((0, 2), dtype=dtype, device=device), torch.zeros((0,), dtype=torch.bool, device=device)
+    position = memory_read.position[mask].to(device=device, dtype=dtype)
+    velocity = memory_read.velocity[mask].to(device=device, dtype=dtype)
+    projected = position + velocity
+    wrap_span = _active_file_wrap_span(cfg)
+    if wrap_span is not None and wrap_span > 0:
+        margin = float(max(4, cfg.image_size // 7))
+        projected = ((projected - margin) % float(wrap_span)) + margin
+    valid = memory_read.position_valid[mask].to(device=device) & memory_read.velocity_valid[mask].to(device=device)
+    return projected, valid
 
 
 def _active_file_expectation(
@@ -214,6 +288,7 @@ def _active_file_expectation(
     file_confidence: torch.Tensor,
     file_age: torch.Tensor,
     age_scale: float,
+    trajectory_features: torch.Tensor | None = None,
 ) -> torch.Tensor:
     if files.numel() == 0:
         return torch.zeros((0, files.shape[-1]), dtype=files.dtype, device=files.device)
@@ -223,7 +298,14 @@ def _active_file_expectation(
     confidence = file_confidence[:count].to(device=files.device, dtype=files.dtype)
     age = file_age[:count].to(device=files.device, dtype=files.dtype)
     age = torch.log1p(age.clamp_min(0.0)) / max(age_scale, 1.0)
-    features = torch.cat([files, file_context, confidence, age], dim=-1)
+    parts = [files, file_context, confidence, age]
+    if trajectory_features is not None:
+        parts.append(trajectory_features[:count].to(device=files.device, dtype=files.dtype))
+    features = torch.cat(parts, dim=-1)
+    expected_width = expectation[0].in_features if isinstance(expectation, nn.Sequential) else features.shape[-1]
+    if features.shape[-1] < expected_width:
+        padding = torch.zeros((features.shape[0], expected_width - features.shape[-1]), dtype=files.dtype, device=files.device)
+        features = torch.cat([features, padding], dim=-1)
     return files + expectation(features)
 
 
@@ -661,11 +743,25 @@ class Self(nn.Module):
                     expectation_file_context = context.probs[reappeared_for_alignment]
                     expectation_confidence = memory_definition_confidence[reappeared_for_alignment]
                     expectation_age = memory_read.age[reappeared_for_alignment]
+                    expectation_trajectory_features = (
+                        _active_file_trajectory_features(
+                            batch,
+                            memory_read,
+                            reappeared_for_alignment,
+                            self.cfg,
+                            image_t.dtype,
+                            image_t.device,
+                        )
+                        if self.cfg.active_file_expectation_trajectory_features
+                        else None
+                    )
                     if self.cfg.active_file_expectation_detach_inputs:
                         expectation_file_scores = expectation_file_scores.detach()
                         expectation_file_context = expectation_file_context.detach()
                         expectation_confidence = expectation_confidence.detach()
                         expectation_age = expectation_age.detach()
+                        if expectation_trajectory_features is not None:
+                            expectation_trajectory_features = expectation_trajectory_features.detach()
                     expected_state_scores = _active_file_expectation(
                         self.active_file_expectation,
                         expectation_file_scores,
@@ -673,6 +769,7 @@ class Self(nn.Module):
                         expectation_confidence,
                         expectation_age,
                         self.cfg.active_file_candidate_max_age,
+                        expectation_trajectory_features,
                     )
                     expected_query_scores = self.defs.file_query_scores(expected_state_scores)
                 if self.cfg.object_cycle_weight > 0.0:
@@ -1173,6 +1270,18 @@ class Self(nn.Module):
                         self.cfg.active_file_expectation_weight > 0.0
                         or self.cfg.learned_active_file_gate_expectation_features
                     ):
+                        expectation_trajectory_features = (
+                            _active_file_trajectory_features(
+                                batch,
+                                memory_read,
+                                reappeared_active,
+                                self.cfg,
+                                image_t.dtype,
+                                image_t.device,
+                            )
+                            if self.cfg.active_file_expectation_trajectory_features
+                            else None
+                        )
                         expected_state_scores = _active_file_expectation(
                             self.active_file_expectation,
                             object_file_scores,
@@ -1180,6 +1289,7 @@ class Self(nn.Module):
                             memory_definition_confidence[reappeared_active],
                             memory_read.age[reappeared_active],
                             self.cfg.active_file_candidate_max_age,
+                            expectation_trajectory_features,
                         )
                         expected_query_scores = self.defs.file_query_scores(expected_state_scores)
                     source_labels = object_id[reappeared_active]
@@ -1250,6 +1360,25 @@ class Self(nn.Module):
                                 target_definition_scores.to(image_t.dtype),
                             ),
                         ))
+                    if self.cfg.active_file_expectation_trajectory_features and "object_position_tp1" in batch:
+                        projected_position, projected_valid = _active_file_projected_position(
+                            memory_read,
+                            reappeared_active,
+                            self.cfg,
+                            image_t.dtype,
+                            image_t.device,
+                        )
+                        target_position = batch["object_position_tp1"].to(device=image_t.device, dtype=image_t.dtype)[
+                            reappeared_active
+                        ]
+                        if bool(projected_valid.any().item()):
+                            position_error = (
+                                projected_position[projected_valid] - target_position[projected_valid]
+                            ).norm(dim=-1).mean() / float(max(1, self.cfg.image_size))
+                        else:
+                            position_error = _zero_like_scalar(image_t)
+                        diagnostics["reappeared_trajectory_position_error"] = position_error
+                        diagnostics["reappeared_trajectory_valid_fraction"] = projected_valid.to(image_t.dtype).mean()
                     active_candidates = None
                     if "object_position_tp1" in batch:
                         active_candidates = _active_file_candidate_mask(
@@ -1468,6 +1597,8 @@ class Self(nn.Module):
                         "reappeared_expected_state_instance_hard_same_distance": _zero_like_scalar(image_t),
                         "reappeared_expected_state_instance_nearest_same_group_other_distance": _zero_like_scalar(image_t),
                         "reappeared_expected_state_instance_hard_valid_fraction": _zero_like_scalar(image_t),
+                        "reappeared_trajectory_position_error": _zero_like_scalar(image_t),
+                        "reappeared_trajectory_valid_fraction": _zero_like_scalar(image_t),
                         "reappeared_active_query_file_candidate_instance_match_accuracy": _zero_like_scalar(image_t),
                         "reappeared_active_query_file_candidate_instance_match_margin": _zero_like_scalar(image_t),
                         "reappeared_active_query_file_candidate_instance_same_distance": _zero_like_scalar(image_t),

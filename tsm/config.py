@@ -49,6 +49,8 @@ class TsmConfig:
     active_file_expectation_temperature: float = 0.25
     active_file_expectation_hard_weight: float = 0.0
     active_file_expectation_detach_inputs: bool = True
+    active_file_expectation_trajectory_features: bool = False
+    active_file_expectation_phase_count: int = 5
     active_file_candidate_radius: float = 10.0
     active_file_candidate_max_age: float = 8.0
     active_file_candidate_wrap: bool = False

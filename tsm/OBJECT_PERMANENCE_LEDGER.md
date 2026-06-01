@@ -15,12 +15,13 @@ This ledger records the current experimental status of the temporal object-conti
 9. Visible feature binding remains weak: unresolved.
 10. Candidate gating is learned from Definition/file geometry rather than position metadata: partial.
 11. Context-aware learned candidate gating improves lookup without densifying Definitions: yes.
-12. Object-file expectation predicts its own future Definition state: not yet.
-13. Full exact object permanence: not yet.
+12. Object files carry explicit phase/trajectory state: yes, scaffolded.
+13. Object-file expectation predicts its own future Definition state: not yet.
+14. Full exact object permanence: not yet.
 
 ## Current Claim
 
-TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance, especially against hard same-class negatives. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. A learned active gate can recover part of that live set from Definition/file geometry and context without position input, but it is still weaker than the scaffold. A residual object-file expectation head can be trained and used by the gate, but it does not yet predict the exact reappeared Definition/query state under held-out evaluation. Full object permanence is still not solved because visible reappeared state does not bind cleanly back to the exact object file under global lookup.
+TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance, especially against hard same-class negatives. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. A learned active gate can recover part of that live set from Definition/file geometry and context without position input, but it is still weaker than the scaffold. Object files now carry scaffolded phase/trajectory state, and the expectation head can use it, but this does not yet produce exact reappeared Definition/query prediction under held-out evaluation. Full object permanence is still not solved because visible reappeared state does not bind cleanly back to the exact object file under global lookup.
 
 ## Next Target
 
@@ -216,3 +217,37 @@ Latest held-out checkpoint:
 - ternary nonzero fraction: `0.108`
 
 This is another useful negative result. The future-state loss is active and decreases compared with the earlier query-target run, but the expected state still fails exact held-out matching. The final train-batch summary shows nonzero expected-state matching, while held-out exact remains `0.000`, so the current head is not learning a reusable reappearance expectation. It also does not improve the context-aware learned gate: exact matching is flat, hard matching is slightly weaker, the occluded bridge is weaker, and ternary density is higher than the prior context-aware run. The next target should add a real phase/trajectory state to the object file rather than increasing pressure on the same file-plus-context expectation head.
+
+## Phase/Trajectory Object-File State Result
+
+Run: `runs/20260601_172419_temporal_objects_expected_trajectory_state`
+
+Config: `configs/temporal_objects_expected_trajectory_state.yaml`
+
+This run adds explicit object-file phase/trajectory state. Memory now stores last visible position, simple visible-to-visible velocity, and last visible phase. The expectation head can use normalized last position, velocity, projected position, current/next phase one-hot state, and visibility flags. This is still scaffolded: phase and position metadata come from the synthetic stream.
+
+Best held-out checkpoint:
+
+- expectation pair / hard loss: `2.827` / `1.493`
+- expected-state exact / hard match: `0.078` / `0.229`
+- expected-file exact / hard match: `0.127` / `0.301`
+- learned target recall: `0.866`
+- learned exact / hard match: `0.240` / `0.518`
+- scaffolded active exact / hard match: `0.319` / `0.693`
+- occluded bridge: `+0.145`
+- ternary nonzero fraction: `0.083`
+- trajectory position error: `0.364`
+
+Latest held-out checkpoint:
+
+- expectation pair / hard loss: `2.794` / `1.385`
+- expected-state exact / hard match: `0.078` / `0.336`
+- expected-file exact / hard match: `0.000` / `0.336`
+- learned target recall: `0.814`
+- learned exact / hard match: `0.235` / `0.560`
+- scaffolded active exact / hard match: `0.313` / `0.701`
+- occluded bridge: `+0.291`
+- ternary nonzero fraction: `0.060`
+- trajectory position error: `0.364`
+
+This is a partial result. Adding phase/trajectory state makes the expectation losses lower and improves hard expected-state/file matching compared with the direct future-state run, while ternary remains sparse. But exact expected-state matching is still only at the paired chance floor, learned exact lookup does not improve, and the simple velocity projection is a bad predictor of the wrapped reappearance position. The useful lesson is narrower: object files now carry the missing state substrate, but the current projection is too crude. The next target is a learned phase-transition/trajectory model for reappearance position or phase-conditioned object-file prediction, not more pressure on the expectation head.

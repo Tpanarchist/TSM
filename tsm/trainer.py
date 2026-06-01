@@ -309,6 +309,9 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                     if "reappeared_expected_state_instance_match_accuracy" in last_metrics:
                         handle.write(f"- final_reappeared_expected_state_instance_match_accuracy: {last_metrics['reappeared_expected_state_instance_match_accuracy']:.3f}\n")
                         handle.write(f"- final_reappeared_expected_state_hard_instance_match_accuracy: {last_metrics['reappeared_expected_state_instance_hard_match_accuracy']:.3f}\n")
+                    if "reappeared_trajectory_position_error" in last_metrics:
+                        handle.write(f"- final_reappeared_trajectory_position_error: {last_metrics['reappeared_trajectory_position_error']:.6f}\n")
+                        handle.write(f"- final_reappeared_trajectory_valid_fraction: {last_metrics['reappeared_trajectory_valid_fraction']:.3f}\n")
                     if "active_file_expectation_pair" in last_metrics:
                         handle.write(f"- final_active_file_expectation_pair_loss: {last_metrics['active_file_expectation_pair']:.6f}\n")
                         handle.write(f"- final_active_file_expectation_hard_loss: {last_metrics['active_file_expectation_hard']:.6f}\n")

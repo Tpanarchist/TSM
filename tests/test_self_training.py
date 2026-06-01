@@ -1,6 +1,7 @@
 import torch
 
 from tsm.config import TsmConfig
+from tsm.memory import Memory
 from tsm.self_field import (
     Self,
     _active_file_candidate_mask,
@@ -170,12 +171,14 @@ def test_active_file_expectation_predicts_query_shape():
         patch_size=4,
         attention_heads=4,
         inference_steps=1,
+        active_file_expectation_trajectory_features=True,
     )
     model = Self(cfg)
     files = torch.rand(2, cfg.definitions_per_context)
     file_context = torch.softmax(torch.rand(2, cfg.contexts), dim=-1)
     confidence = torch.ones(2, 1)
     age = torch.zeros(2, 1)
+    trajectory = torch.rand(2, 13 + 2 * cfg.active_file_expectation_phase_count)
 
     expected_query = _active_file_expectation(
         model.active_file_expectation,
@@ -184,9 +187,28 @@ def test_active_file_expectation_predicts_query_shape():
         confidence,
         age,
         8.0,
+        trajectory,
     )
 
     assert expected_query.shape == (2, cfg.definitions_per_context)
+
+
+def test_object_memory_tracks_velocity_and_phase():
+    memory = Memory()
+    batch = {
+        "sequence_id": torch.zeros(3, dtype=torch.long),
+        "visible_t": torch.ones(3),
+        "phase": torch.tensor([0, 1, 2], dtype=torch.long),
+        "object_position_t": torch.tensor([[1.0, 1.0], [3.0, 2.0], [6.0, 4.0]]),
+    }
+    features = torch.arange(12, dtype=torch.float32).view(3, 4)
+
+    read = memory.read_write_object_files(batch, features, step=0)
+
+    assert bool(read.velocity_valid[2].item())
+    assert torch.allclose(read.velocity[2], torch.tensor([2.0, 1.0]))
+    assert bool(read.phase_valid[2].item())
+    assert torch.allclose(read.phase[2], torch.tensor([1.0]))
 
 
 def test_forward_train_reports_temporal_object_diagnostics():
@@ -202,6 +224,7 @@ def test_forward_train_reports_temporal_object_diagnostics():
         inference_steps=1,
         active_file_expectation_weight=0.003,
         active_file_expectation_hard_weight=1.0,
+        active_file_expectation_trajectory_features=True,
         learned_active_file_gate_context_features=True,
         learned_active_file_gate_expectation_features=True,
     )
@@ -272,6 +295,8 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_expected_state_paired_feature_match_accuracy",
         "reappeared_expected_state_instance_match_accuracy",
         "reappeared_expected_state_instance_hard_match_accuracy",
+        "reappeared_trajectory_position_error",
+        "reappeared_trajectory_valid_fraction",
         "reappeared_active_query_file_candidate_instance_match_accuracy",
         "reappeared_active_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_active_query_file_candidate_mean_count",
