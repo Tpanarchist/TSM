@@ -1,6 +1,11 @@
 import torch
 
-from tsm.diagnostics import feature_label_diagnostics, ternary_axis_specialization, ternary_label_diagnostics
+from tsm.diagnostics import (
+    feature_label_diagnostics,
+    feature_match_diagnostics,
+    ternary_axis_specialization,
+    ternary_label_diagnostics,
+)
 
 
 def test_ternary_label_diagnostics_detect_mode_structure():
@@ -60,3 +65,25 @@ def test_feature_label_diagnostics_probe_recovers_cluster_labels():
     assert metrics["feature_probe_accuracy"].item() == 1.0
     assert metrics["feature_centroid_separation"].item() > 0.0
     assert metrics["feature_label_count"].item() == 2.0
+
+
+def test_feature_match_diagnostics_scores_source_target_identity():
+    source = torch.tensor(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ]
+    )
+    target = torch.tensor(
+        [
+            [0.0, 1.0],
+            [1.0, 0.0],
+        ]
+    )
+    source_labels = torch.tensor([0, 1])
+    target_labels = torch.tensor([1, 0])
+
+    metrics = feature_match_diagnostics(source, target, source_labels, target_labels)
+
+    assert metrics["feature_match_accuracy"].item() == 1.0
+    assert metrics["feature_match_margin"].item() > 0.0

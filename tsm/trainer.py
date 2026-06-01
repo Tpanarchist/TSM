@@ -267,6 +267,11 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
             if "occluded_base_ternary_mode_probe_accuracy" in last_metrics:
                 handle.write(f"- final_occluded_base_ternary_probe_accuracy: {last_metrics['occluded_base_ternary_mode_probe_accuracy']:.3f}\n")
                 handle.write(f"- final_occluded_memory_definition_object_probe_delta: {last_metrics['occluded_memory_definition_object_probe_delta']:.3f}\n")
+            if "reappeared_feature_match_accuracy" in last_metrics:
+                handle.write(f"- final_reappeared_ternary_match_accuracy: {last_metrics['reappeared_feature_match_accuracy']:.3f}\n")
+                handle.write(f"- final_reappeared_base_ternary_match_accuracy: {last_metrics['reappeared_base_feature_match_accuracy']:.3f}\n")
+                handle.write(f"- final_reappeared_memory_definition_match_delta: {last_metrics['reappeared_memory_definition_match_delta']:.3f}\n")
+                handle.write(f"- final_reappeared_ternary_match_margin: {last_metrics['reappeared_feature_match_margin']:.6f}\n")
             if "occluded_memory_object_feature_probe_accuracy" in last_metrics:
                 handle.write(f"- final_occluded_memory_object_probe_accuracy: {last_metrics['occluded_memory_object_feature_probe_accuracy']:.3f}\n")
                 handle.write(f"- final_occluded_memory_object_centroid_separation: {last_metrics['occluded_memory_object_feature_centroid_separation']:.3f}\n")
@@ -390,6 +395,7 @@ def run_seed_sweep(
     seeds: list[int] | None = None,
     steps: int | None = None,
     disabled_cfg: TrainConfig | None = None,
+    comparison_cfgs: list[tuple[str, TrainConfig]] | None = None,
     eval_split: str = "test",
     eval_limit: int | None = None,
     out_dir: str | Path | None = None,
@@ -403,6 +409,7 @@ def run_seed_sweep(
     configs = [("enabled", cfg)]
     if disabled_cfg is not None:
         configs.append(("disabled", disabled_cfg))
+    configs.extend(comparison_cfgs or [])
     for seed in seeds:
         for condition, base_cfg in configs:
             run_cfg = copy.deepcopy(base_cfg)
@@ -442,8 +449,12 @@ def run_seed_sweep(
         handle.write("# Ternary Seed Sweep\n\n")
         handle.write(f"- eval_split: {eval_split}\n")
         handle.write(f"- seeds: {', '.join(str(seed) for seed in seeds)}\n\n")
-        handle.write("| seed | condition | heldout_total | heldout_prediction | probe | mi | nonzero | axis_usage | run |\n")
-        handle.write("|---:|---|---:|---:|---:|---:|---:|---:|---|\n")
+        handle.write(
+            "| seed | condition | heldout_total | heldout_prediction | probe | "
+            "occluded_probe | occluded_base | bridge_delta | reappear_match | "
+            "memory_def_impact | mi | nonzero | axis_usage | run |\n"
+        )
+        handle.write("|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
         for row in rows:
             heldout = row["heldout"]
             axis = row["axis_diagnostics"]
@@ -453,6 +464,11 @@ def run_seed_sweep(
                 f"{_metric(heldout, 'total'):.6f} | "
                 f"{_metric(heldout, 'prediction'):.6f} | "
                 f"{_metric(axis, 'ternary_mode_probe_accuracy'):.3f} | "
+                f"{_metric(heldout, 'occluded_object_ternary_mode_probe_accuracy'):.3f} | "
+                f"{_metric(heldout, 'occluded_base_ternary_mode_probe_accuracy'):.3f} | "
+                f"{_metric(heldout, 'occluded_memory_definition_object_probe_delta'):.3f} | "
+                f"{_metric(heldout, 'reappeared_feature_match_accuracy'):.3f} | "
+                f"{_metric(heldout, 'memory_definition_prediction_occluded_impact_mean'):.6f} | "
                 f"{_metric(axis, 'ternary_mode_mutual_information'):.3f} | "
                 f"{_metric(heldout, 'ternary_nonzero_fraction'):.3f} | "
                 f"{_metric(axis, 'ternary_axis_usage_count'):.1f} | "

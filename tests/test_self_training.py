@@ -149,6 +149,9 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "occluded_memory_object_feature_probe_accuracy",
         "occluded_base_ternary_mode_probe_accuracy",
         "occluded_memory_definition_object_probe_delta",
+        "reappeared_feature_match_accuracy",
+        "reappeared_base_feature_match_accuracy",
+        "reappeared_memory_definition_match_delta",
     }
     assert torch.allclose(out.diagnostics["temporal_visible_fraction"], torch.tensor(0.6), atol=1e-6)
     assert torch.allclose(out.diagnostics["temporal_occluded_fraction"], torch.tensor(0.4), atol=1e-6)

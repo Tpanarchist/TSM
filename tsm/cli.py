@@ -13,6 +13,18 @@ def _parse_seeds(value: str) -> list[int]:
     return [int(part.strip()) for part in value.split(",") if part.strip()]
 
 
+def _parse_compare_configs(values: list[str] | None) -> list[tuple[str, TrainConfig]]:
+    comparisons: list[tuple[str, TrainConfig]] = []
+    for value in values or []:
+        if "=" in value:
+            name, path = value.split("=", 1)
+        else:
+            path = value
+            name = Path(path).stem
+        comparisons.append((name.strip(), TrainConfig.from_yaml(path.strip())))
+    return comparisons
+
+
 def _cmd_data_pull(args: argparse.Namespace) -> None:
     name = canonical_dataset_name(args.dataset)
     ds = load_public_dataset(name, args.split, args.cache)
@@ -56,12 +68,14 @@ def _cmd_smoke(args: argparse.Namespace) -> None:
 def _cmd_seed_sweep(args: argparse.Namespace) -> None:
     cfg = TrainConfig.from_yaml(args.config)
     disabled_cfg = TrainConfig.from_yaml(args.disabled_config) if args.disabled_config else None
+    comparison_cfgs = _parse_compare_configs(args.compare_config)
     sweep_dir = run_seed_sweep(
         cfg,
         device_name=args.device,
         seeds=_parse_seeds(args.seeds),
         steps=args.steps,
         disabled_cfg=disabled_cfg,
+        comparison_cfgs=comparison_cfgs,
         eval_split=args.eval_split,
         eval_limit=args.eval_limit,
         out_dir=args.out,
@@ -114,6 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
     sweep_cmd = sub.add_parser("seed-sweep")
     sweep_cmd.add_argument("--config", required=True)
     sweep_cmd.add_argument("--disabled-config")
+    sweep_cmd.add_argument("--compare-config", action="append", help="Additional NAME=path config to include")
     sweep_cmd.add_argument("--seeds", default="31,37,43")
     sweep_cmd.add_argument("--steps", type=int)
     sweep_cmd.add_argument("--device", default="cuda")

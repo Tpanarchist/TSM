@@ -172,6 +172,59 @@ def feature_label_diagnostics(features: torch.Tensor, labels: torch.Tensor) -> d
     }
 
 
+def feature_match_diagnostics(
+    source_features: torch.Tensor,
+    target_features: torch.Tensor,
+    source_labels: torch.Tensor,
+    target_labels: torch.Tensor | None = None,
+) -> dict[str, torch.Tensor]:
+    dtype = source_features.dtype
+    device = source_features.device
+    target_labels = source_labels if target_labels is None else target_labels
+    source_labels = source_labels.to(device=device, dtype=torch.long)
+    target_labels = target_labels.to(device=device, dtype=torch.long)
+    source_valid = source_labels >= 0
+    target_valid = target_labels >= 0
+    if (
+        source_features.numel() == 0
+        or target_features.numel() == 0
+        or not bool(source_valid.any().item())
+        or not bool(target_valid.any().item())
+    ):
+        zero = _zero(dtype, device)
+        return {
+            "feature_match_accuracy": zero,
+            "feature_match_margin": zero,
+            "feature_same_distance": zero,
+            "feature_nearest_other_distance": zero,
+        }
+
+    source = source_features.detach()[source_valid].to(dtype)
+    source_labels = source_labels[source_valid]
+    target = target_features.detach()[target_valid].to(device=device, dtype=dtype)
+    target_labels = target_labels[target_valid]
+    distances = (source.unsqueeze(1) - target.unsqueeze(0)).square().mean(dim=-1)
+    nearest = distances.argmin(dim=1)
+    pred_labels = target_labels[nearest]
+    accuracy = (pred_labels == source_labels).to(dtype).mean()
+
+    same_values: list[torch.Tensor] = []
+    other_values: list[torch.Tensor] = []
+    for row in range(source.shape[0]):
+        same = target_labels == source_labels[row]
+        other = ~same
+        same_values.append(distances[row, same].min() if bool(same.any().item()) else _zero(dtype, device))
+        other_values.append(distances[row, other].min() if bool(other.any().item()) else _zero(dtype, device))
+    same_distance = torch.stack(same_values).mean() if same_values else _zero(dtype, device)
+    other_distance = torch.stack(other_values).mean() if other_values else _zero(dtype, device)
+    return {
+        "feature_match_accuracy": accuracy,
+        "feature_match_margin": other_distance - same_distance,
+        "feature_same_distance": same_distance,
+        "feature_nearest_other_distance": other_distance,
+    }
+
+
 def ternary_axis_specialization(
     ternary: torch.Tensor,
     labels: torch.Tensor,

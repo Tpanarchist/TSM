@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 from .config import TsmConfig
 from .context import ContextRouter, context_balance_loss, context_entropy
-from .diagnostics import feature_label_diagnostics, ternary_label_diagnostics
+from .diagnostics import feature_label_diagnostics, feature_match_diagnostics, ternary_label_diagnostics
 from .definitions import DefinitionBank
 from .develop import DevelopmentalScheduler
 from .drives import DriveDynamics
@@ -86,6 +86,10 @@ def _masked_context_used(
     return torch.bincount(context_hard[mask], minlength=context_count).gt(0).to(dtype).sum()
 
 
+def _zero_like_scalar(reference: torch.Tensor) -> torch.Tensor:
+    return torch.zeros((), dtype=reference.dtype, device=reference.device)
+
+
 class Self(nn.Module):
     def __init__(self, cfg: TsmConfig | None = None) -> None:
         super().__init__()
@@ -102,6 +106,44 @@ class Self(nn.Module):
         self.gate = MutationGate()
         self.trauma = TraumaMonitor()
         self.stage = DevelopmentalScheduler()
+
+    @torch.no_grad()
+    def _diagnostic_ternary_for_image(
+        self,
+        image: torch.Tensor,
+        dataset_id: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        perception = self.perception(image, dataset_id=dataset_id)
+        batch_size = image.shape[0]
+        initial_q = self.mind.initial(batch_size, image.device)
+        context = self.contexts(initial_q, perception.latents)
+        expected0 = self.reality.predict_latents(initial_q, context.embedding)
+        drives = DriveState.zeros(batch_size, image.device)
+        attach_power = torch.zeros_like(perception.latents)
+        sae0 = self.sae(
+            perception.latents,
+            expected0,
+            perception.meta.source_confidence,
+            attach_power,
+            drives,
+            context.probs,
+        )
+        q, _delta_q = self.mind.infer(
+            perception.latents,
+            sae0.eps,
+            context.embedding,
+            steps=self.cfg.inference_steps,
+        )
+        expected = self.reality.predict_latents(q, context.embedding)
+        sae = self.sae(
+            perception.latents,
+            expected,
+            perception.meta.source_confidence,
+            attach_power,
+            drives,
+            context.probs,
+        )
+        return self.defs.project(sae.eps, context.probs)
 
     def forward_train(self, batch: dict[str, torch.Tensor], include_label_diagnostics: bool = True) -> TrainOutput:
         image_t = batch["image_t"]
@@ -494,6 +536,46 @@ class Self(nn.Module):
                         "occluded_memory_object_",
                         feature_label_diagnostics(memory_feature[occluded_active], object_id[occluded_active]),
                     ))
+                reappeared_active = reappeared & (object_id >= 0)
+                if bool(reappeared_active.any().item()):
+                    target_dataset_id = dataset_id[reappeared_active] if dataset_id is not None else None
+                    target_ternary = self._diagnostic_ternary_for_image(
+                        image_tp1[reappeared_active],
+                        dataset_id=target_dataset_id,
+                    )
+                    source_labels = object_id[reappeared_active]
+                    diagnostics.update(_prefix_metrics(
+                        "reappeared_",
+                        feature_match_diagnostics(
+                            ternary[reappeared_active].sign().to(image_t.dtype),
+                            target_ternary.sign().to(image_t.dtype),
+                            source_labels,
+                        ),
+                    ))
+                    diagnostics.update(_prefix_metrics(
+                        "reappeared_base_",
+                        feature_match_diagnostics(
+                            ternary_base[reappeared_active].sign().to(image_t.dtype),
+                            target_ternary.sign().to(image_t.dtype),
+                            source_labels,
+                        ),
+                    ))
+                    diagnostics["reappeared_memory_definition_match_delta"] = (
+                        diagnostics["reappeared_feature_match_accuracy"]
+                        - diagnostics["reappeared_base_feature_match_accuracy"]
+                    )
+                elif include_label_diagnostics:
+                    diagnostics.update({
+                        "reappeared_feature_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_feature_match_margin": _zero_like_scalar(image_t),
+                        "reappeared_feature_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_feature_nearest_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_base_feature_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_base_feature_match_margin": _zero_like_scalar(image_t),
+                        "reappeared_base_feature_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_base_feature_nearest_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_memory_definition_match_delta": _zero_like_scalar(image_t),
+                    })
         total = (
             self.cfg.recon_weight * losses["reconstruction"]
             + self.cfg.pred_weight * losses["prediction"]
