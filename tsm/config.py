@@ -48,6 +48,9 @@ class TsmConfig:
     active_file_candidate_radius: float = 10.0
     active_file_candidate_max_age: float = 8.0
     active_file_candidate_wrap: bool = False
+    learned_active_file_gate_weight: float = 0.0
+    learned_active_file_gate_topk: int = 8
+    learned_active_file_gate_threshold: float = 0.5
 
 
 @dataclass
