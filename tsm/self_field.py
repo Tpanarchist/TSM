@@ -9,6 +9,7 @@ from .context import ContextRouter, context_balance_loss, context_entropy
 from .diagnostics import (
     feature_label_diagnostics,
     feature_match_diagnostics,
+    grouped_instance_match_diagnostics,
     paired_feature_match_diagnostics,
     ternary_label_diagnostics,
 )
@@ -95,15 +96,59 @@ def _zero_like_scalar(reference: torch.Tensor) -> torch.Tensor:
     return torch.zeros((), dtype=reference.dtype, device=reference.device)
 
 
-def _paired_contrastive_loss(source: torch.Tensor, target: torch.Tensor, temperature: float) -> torch.Tensor:
+def _paired_contrastive_loss(
+    source: torch.Tensor,
+    target: torch.Tensor,
+    temperature: float,
+    detach_target: bool = True,
+) -> torch.Tensor:
     if source.shape[0] < 2 or target.shape[0] < 2:
         return _zero_like_scalar(source)
     pair_count = min(source.shape[0], target.shape[0])
     source = F.normalize(source[:pair_count], dim=-1, eps=1e-6)
-    target = F.normalize(target[:pair_count].detach().to(device=source.device, dtype=source.dtype), dim=-1, eps=1e-6)
+    target = target[:pair_count].to(device=source.device, dtype=source.dtype)
+    if detach_target:
+        target = target.detach()
+    target = F.normalize(target, dim=-1, eps=1e-6)
     logits = torch.matmul(source, target.t()) / max(temperature, 1e-6)
     labels = torch.arange(pair_count, device=source.device)
     return F.cross_entropy(logits, labels)
+
+
+def _bidirectional_paired_contrastive_loss(
+    source: torch.Tensor,
+    target: torch.Tensor,
+    temperature: float,
+) -> torch.Tensor:
+    if source.shape[0] < 2 or target.shape[0] < 2:
+        return _zero_like_scalar(source)
+    return 0.5 * (
+        _paired_contrastive_loss(source, target, temperature, detach_target=False)
+        + _paired_contrastive_loss(target, source, temperature, detach_target=False)
+    )
+
+
+def _object_cycle_loss(
+    hidden_scores: torch.Tensor,
+    reappeared_scores: torch.Tensor,
+    hidden_file_scores: torch.Tensor,
+    reappeared_file_scores: torch.Tensor,
+    temperature: float,
+    pair_weight: float,
+    file_weight: float,
+) -> torch.Tensor:
+    if (
+        hidden_scores.shape[0] < 2
+        or reappeared_scores.shape[0] < 2
+        or hidden_file_scores.shape[0] < 2
+        or reappeared_file_scores.shape[0] < 2
+    ):
+        return _zero_like_scalar(hidden_scores)
+    hidden_to_file = _bidirectional_paired_contrastive_loss(hidden_scores, hidden_file_scores, temperature)
+    reappeared_to_file = _bidirectional_paired_contrastive_loss(reappeared_scores, reappeared_file_scores, temperature)
+    file_context_cycle = _bidirectional_paired_contrastive_loss(hidden_file_scores, reappeared_file_scores, temperature)
+    hidden_to_reappeared = _bidirectional_paired_contrastive_loss(hidden_scores, reappeared_scores, temperature)
+    return hidden_to_file + reappeared_to_file + file_weight * file_context_cycle + pair_weight * hidden_to_reappeared
 
 
 class Self(nn.Module):
@@ -161,12 +206,11 @@ class Self(nn.Module):
         )
         return self.defs.project(sae.eps, context.probs)
 
-    @torch.no_grad()
-    def _diagnostic_definition_scores_for_image(
+    def _definition_state_for_image(
         self,
         image: torch.Tensor,
         dataset_id: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         perception = self.perception(image, dataset_id=dataset_id)
         batch_size = image.shape[0]
         initial_q = self.mind.initial(batch_size, image.device)
@@ -197,7 +241,31 @@ class Self(nn.Module):
             drives,
             context.probs,
         )
-        return self.defs.raw_scores(sae.eps, context.probs)
+        return self.defs.raw_scores(sae.eps, context.probs), context.probs
+
+    def _definition_scores_for_image(
+        self,
+        image: torch.Tensor,
+        dataset_id: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        scores, _context_probs = self._definition_state_for_image(image, dataset_id)
+        return scores
+
+    @torch.no_grad()
+    def _diagnostic_definition_scores_for_image(
+        self,
+        image: torch.Tensor,
+        dataset_id: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return self._definition_scores_for_image(image, dataset_id)
+
+    @torch.no_grad()
+    def _diagnostic_definition_state_for_image(
+        self,
+        image: torch.Tensor,
+        dataset_id: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self._definition_state_for_image(image, dataset_id)
 
     def forward_train(self, batch: dict[str, torch.Tensor], include_label_diagnostics: bool = True) -> TrainOutput:
         image_t = batch["image_t"]
@@ -261,7 +329,11 @@ class Self(nn.Module):
             memory_prediction_confidence,
         )
         reappearance_alignment = _zero_like_scalar(image_t)
-        if self.cfg.reappearance_alignment_weight > 0.0 and "visible_tp1" in batch and "occluded_t" in batch:
+        object_cycle_consistency = _zero_like_scalar(image_t)
+        needs_reappearance_target = (
+            self.cfg.reappearance_alignment_weight > 0.0 or self.cfg.object_cycle_weight > 0.0
+        )
+        if needs_reappearance_target and "visible_tp1" in batch and "occluded_t" in batch:
             visible_tp1_for_alignment = batch["visible_tp1"].to(device=image_t.device, dtype=image_t.dtype)
             occluded_t_for_alignment = batch["occluded_t"].to(device=image_t.device, dtype=image_t.dtype)
             reappeared_for_alignment = (occluded_t_for_alignment > 0.5) & (visible_tp1_for_alignment > 0.5)
@@ -273,15 +345,37 @@ class Self(nn.Module):
                     memory_feature,
                     memory_definition_confidence,
                 )
-                target_scores = self._diagnostic_definition_scores_for_image(
+                target_scores, target_context_probs = self._definition_state_for_image(
                     image_tp1[reappeared_for_alignment],
                     dataset_id=target_dataset_id,
                 )
-                reappearance_alignment = _paired_contrastive_loss(
-                    source_scores[reappeared_for_alignment],
-                    target_scores,
-                    self.cfg.reappearance_alignment_temperature,
-                )
+                source_reappeared_scores = source_scores[reappeared_for_alignment]
+                if self.cfg.reappearance_alignment_weight > 0.0:
+                    reappearance_alignment = _paired_contrastive_loss(
+                        source_reappeared_scores,
+                        target_scores,
+                        self.cfg.reappearance_alignment_temperature,
+                    )
+                if self.cfg.object_cycle_weight > 0.0:
+                    source_file_scores = self.defs.memory_scores(
+                        memory_feature[reappeared_for_alignment],
+                        context.probs[reappeared_for_alignment],
+                        memory_definition_confidence[reappeared_for_alignment],
+                    )
+                    target_file_scores = self.defs.memory_scores(
+                        memory_feature[reappeared_for_alignment],
+                        target_context_probs,
+                        memory_definition_confidence[reappeared_for_alignment],
+                    )
+                    object_cycle_consistency = _object_cycle_loss(
+                        source_reappeared_scores,
+                        target_scores,
+                        source_file_scores,
+                        target_file_scores,
+                        self.cfg.object_cycle_temperature,
+                        self.cfg.object_cycle_pair_weight,
+                        self.cfg.object_cycle_file_weight,
+                    )
         prior = self.reality.context_prior(context.probs)
         free_energy = variational_free_energy(sae.raw, sae.precision, q, prior)
         ternary_nonzero = ternary.ne(0)
@@ -305,6 +399,7 @@ class Self(nn.Module):
             "ternary_activation_l1": ternary.abs().mean(),
             "bit_cost": self.defs.bit_cost(),
             "reappearance_alignment": reappearance_alignment,
+            "object_cycle_consistency": object_cycle_consistency,
         }
         diagnostics = {
             "context_max_probability": context.probs.max(dim=-1).values.mean(),
@@ -620,6 +715,26 @@ class Self(nn.Module):
                         image_tp1[reappeared_active],
                         dataset_id=target_dataset_id,
                     )
+                    target_definition_scores, target_context_probs = self._diagnostic_definition_state_for_image(
+                        image_tp1[reappeared_active],
+                        dataset_id=target_dataset_id,
+                    )
+                    source_definition_scores = self.defs.raw_scores(
+                        sae.eps,
+                        context.probs,
+                        memory_feature,
+                        memory_definition_confidence,
+                    )[reappeared_active]
+                    object_file_scores = self.defs.memory_scores(
+                        memory_feature[reappeared_active],
+                        context.probs[reappeared_active],
+                        memory_definition_confidence[reappeared_active],
+                    )
+                    target_object_file_scores = self.defs.memory_scores(
+                        memory_feature[reappeared_active],
+                        target_context_probs,
+                        memory_definition_confidence[reappeared_active],
+                    )
                     source_labels = object_id[reappeared_active]
                     diagnostics.update(_prefix_metrics(
                         "reappeared_",
@@ -651,6 +766,45 @@ class Self(nn.Module):
                             target_ternary.sign().to(image_t.dtype),
                         ),
                     ))
+                    diagnostics.update(_prefix_metrics(
+                        "reappeared_file_",
+                        paired_feature_match_diagnostics(
+                            source_definition_scores.to(image_t.dtype),
+                            object_file_scores.to(image_t.dtype),
+                        ),
+                    ))
+                    diagnostics.update(_prefix_metrics(
+                        "reappeared_target_file_",
+                        paired_feature_match_diagnostics(
+                            target_definition_scores.to(image_t.dtype),
+                            target_object_file_scores.to(image_t.dtype),
+                        ),
+                    ))
+                    if "sequence_id" in batch:
+                        sequence_id = batch["sequence_id"].to(device=image_t.device, dtype=torch.long)
+                        source_sequences = sequence_id[reappeared_active]
+                        diagnostics.update(_prefix_metrics(
+                            "reappeared_file_",
+                            grouped_instance_match_diagnostics(
+                                source_definition_scores.to(image_t.dtype),
+                                object_file_scores.to(image_t.dtype),
+                                source_sequences,
+                                source_sequences,
+                                source_labels,
+                                source_labels,
+                            ),
+                        ))
+                        diagnostics.update(_prefix_metrics(
+                            "reappeared_target_file_",
+                            grouped_instance_match_diagnostics(
+                                target_definition_scores.to(image_t.dtype),
+                                target_object_file_scores.to(image_t.dtype),
+                                source_sequences,
+                                source_sequences,
+                                source_labels,
+                                source_labels,
+                            ),
+                        ))
                     diagnostics["reappeared_memory_definition_match_delta"] = (
                         diagnostics["reappeared_feature_match_accuracy"]
                         - diagnostics["reappeared_base_feature_match_accuracy"]
@@ -669,6 +823,32 @@ class Self(nn.Module):
                         "reappeared_paired_feature_match_margin": _zero_like_scalar(image_t),
                         "reappeared_paired_feature_same_distance": _zero_like_scalar(image_t),
                         "reappeared_paired_feature_nearest_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_file_paired_feature_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_file_paired_feature_match_margin": _zero_like_scalar(image_t),
+                        "reappeared_file_paired_feature_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_file_paired_feature_nearest_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_file_instance_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_file_instance_match_margin": _zero_like_scalar(image_t),
+                        "reappeared_file_instance_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_file_instance_nearest_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_file_instance_hard_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_file_instance_hard_margin": _zero_like_scalar(image_t),
+                        "reappeared_file_instance_hard_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_file_instance_nearest_same_group_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_file_instance_hard_valid_fraction": _zero_like_scalar(image_t),
+                        "reappeared_target_file_paired_feature_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_target_file_paired_feature_match_margin": _zero_like_scalar(image_t),
+                        "reappeared_target_file_paired_feature_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_target_file_paired_feature_nearest_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_target_file_instance_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_target_file_instance_match_margin": _zero_like_scalar(image_t),
+                        "reappeared_target_file_instance_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_target_file_instance_nearest_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_target_file_instance_hard_match_accuracy": _zero_like_scalar(image_t),
+                        "reappeared_target_file_instance_hard_margin": _zero_like_scalar(image_t),
+                        "reappeared_target_file_instance_hard_same_distance": _zero_like_scalar(image_t),
+                        "reappeared_target_file_instance_nearest_same_group_other_distance": _zero_like_scalar(image_t),
+                        "reappeared_target_file_instance_hard_valid_fraction": _zero_like_scalar(image_t),
                         "reappeared_base_feature_match_accuracy": _zero_like_scalar(image_t),
                         "reappeared_base_feature_match_margin": _zero_like_scalar(image_t),
                         "reappeared_base_feature_same_distance": _zero_like_scalar(image_t),
@@ -690,6 +870,7 @@ class Self(nn.Module):
             + self.cfg.ternary_activation_weight * losses["ternary_activation_l1"]
             + self.cfg.bit_cost_weight * losses["bit_cost"]
             + self.cfg.reappearance_alignment_weight * losses["reappearance_alignment"]
+            + self.cfg.object_cycle_weight * losses["object_cycle_consistency"]
         )
         self.memory.write(sae.eps, sae.coherence)
         for candidate in self.evidence.accumulate(delta_q, sae.coherence):

@@ -1,0 +1,46 @@
+run_name: temporal_objects_object_cycle
+batch_size: 64
+max_steps: 300
+learning_rate: 0.0008
+weight_decay: 0.0001
+num_workers: 0
+log_interval: 10
+checkpoint_interval: 50
+sample_interval: 50
+runs_dir: runs
+dataset:
+  name: temporal_objects
+  split: train
+  cache_dir: data/hf
+  limit: 2560
+  seed: 41
+model:
+  d_model: 96
+  workspace_latents: 24
+  hierarchy_depth: 2
+  contexts: 4
+  definitions_per_context: 12
+  image_channels: 1
+  image_size: 28
+  patch_size: 4
+  attention_heads: 4
+  inference_steps: 2
+  recon_weight: 1.0
+  pred_weight: 1.0
+  free_energy_weight: 0.03
+  complexity_weight: 0.01
+  context_entropy_weight: 0.001
+  context_balance_weight: 0.02
+  ternary_activation_weight: 0.001
+  bit_cost_weight: 0.0005
+  use_ternary_conditioning: true
+  ternary_condition_scale: 0.25
+  use_memory_conditioning: true
+  memory_condition_scale: 0.2
+  memory_definition_scale: 0.75
+  reappearance_alignment_weight: 0.0
+  reappearance_alignment_temperature: 0.25
+  object_cycle_weight: 0.01
+  object_cycle_temperature: 0.25
+  object_cycle_pair_weight: 0.25
+  object_cycle_file_weight: 0.25

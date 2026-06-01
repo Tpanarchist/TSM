@@ -82,6 +82,23 @@ class DefinitionBank(nn.Module):
             raw = raw + self.cfg.memory_definition_scale * confidence.clamp(0.0, 1.0) * memory_raw
         return raw
 
+    def memory_scores(
+        self,
+        memory_feature: torch.Tensor,
+        ctx_probs: torch.Tensor,
+        memory_confidence: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        confidence = memory_confidence if memory_confidence is not None else torch.ones(
+            memory_feature.shape[0],
+            1,
+            dtype=memory_feature.dtype,
+            device=memory_feature.device,
+        )
+        memory_axes = F.normalize(self.memory_axes, dim=-1)
+        memory_per_ctx = torch.einsum("bd,kjd->bkj", memory_feature, memory_axes)
+        memory_raw = torch.einsum("bk,bkj->bj", ctx_probs, memory_per_ctx)
+        return self.cfg.memory_definition_scale * confidence.clamp(0.0, 1.0) * memory_raw
+
     def bit_cost(self) -> torch.Tensor:
         tau_cost = self.log_tau.exp().reciprocal().mean()
         alpha_cost = self.log_alpha.exp().mean()

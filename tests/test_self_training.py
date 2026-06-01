@@ -37,6 +37,7 @@ def test_forward_train_returns_loss_dict_and_images():
         "ternary_activation_l1",
         "bit_cost",
         "reappearance_alignment",
+        "object_cycle_consistency",
     }
     assert set(out.diagnostics) >= {
         "context_effective_count",
@@ -156,6 +157,12 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_paired_feature_match_accuracy",
         "reappeared_base_paired_feature_match_accuracy",
         "reappeared_paired_memory_definition_match_delta",
+        "reappeared_file_paired_feature_match_accuracy",
+        "reappeared_file_instance_match_accuracy",
+        "reappeared_file_instance_hard_match_accuracy",
+        "reappeared_target_file_paired_feature_match_accuracy",
+        "reappeared_target_file_instance_match_accuracy",
+        "reappeared_target_file_instance_hard_match_accuracy",
     }
     assert torch.allclose(out.diagnostics["temporal_visible_fraction"], torch.tensor(0.6), atol=1e-6)
     assert torch.allclose(out.diagnostics["temporal_occluded_fraction"], torch.tensor(0.4), atol=1e-6)

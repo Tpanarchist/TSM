@@ -3,6 +3,7 @@ import torch
 from tsm.diagnostics import (
     feature_label_diagnostics,
     feature_match_diagnostics,
+    grouped_instance_match_diagnostics,
     paired_feature_match_diagnostics,
     ternary_axis_specialization,
     ternary_label_diagnostics,
@@ -108,3 +109,28 @@ def test_paired_feature_match_diagnostics_scores_exact_pairs():
 
     assert metrics["paired_feature_match_accuracy"].item() == 1.0
     assert metrics["paired_feature_match_margin"].item() > 0.0
+
+
+def test_grouped_instance_match_diagnostics_uses_same_group_hard_negatives():
+    source = torch.tensor(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.9, 0.1],
+        ]
+    )
+    target = torch.tensor(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.9, 0.1],
+        ]
+    )
+    instances = torch.tensor([10, 11, 12])
+    groups = torch.tensor([0, 1, 0])
+
+    metrics = grouped_instance_match_diagnostics(source, target, instances, instances, groups, groups)
+
+    assert metrics["instance_match_accuracy"].item() == 1.0
+    assert metrics["instance_hard_match_accuracy"].item() == 1.0
+    assert metrics["instance_hard_valid_fraction"].item() > 0.0

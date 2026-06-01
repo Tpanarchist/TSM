@@ -265,6 +265,105 @@ def paired_feature_match_diagnostics(
     }
 
 
+def grouped_instance_match_diagnostics(
+    source_features: torch.Tensor,
+    target_features: torch.Tensor,
+    source_instance_labels: torch.Tensor,
+    target_instance_labels: torch.Tensor,
+    source_group_labels: torch.Tensor,
+    target_group_labels: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    dtype = source_features.dtype
+    device = source_features.device
+    source_instance_labels = source_instance_labels.to(device=device, dtype=torch.long)
+    target_instance_labels = target_instance_labels.to(device=device, dtype=torch.long)
+    source_group_labels = source_group_labels.to(device=device, dtype=torch.long)
+    target_group_labels = target_group_labels.to(device=device, dtype=torch.long)
+    source_valid = (source_instance_labels >= 0) & (source_group_labels >= 0)
+    target_valid = (target_instance_labels >= 0) & (target_group_labels >= 0)
+    if (
+        source_features.numel() == 0
+        or target_features.numel() == 0
+        or not bool(source_valid.any().item())
+        or not bool(target_valid.any().item())
+    ):
+        zero = _zero(dtype, device)
+        return {
+            "instance_match_accuracy": zero,
+            "instance_match_margin": zero,
+            "instance_same_distance": zero,
+            "instance_nearest_other_distance": zero,
+            "instance_hard_match_accuracy": zero,
+            "instance_hard_margin": zero,
+            "instance_hard_same_distance": zero,
+            "instance_nearest_same_group_other_distance": zero,
+            "instance_hard_valid_fraction": zero,
+        }
+
+    source = source_features.detach()[source_valid].to(dtype)
+    source_instances = source_instance_labels[source_valid]
+    source_groups = source_group_labels[source_valid]
+    target = target_features.detach()[target_valid].to(device=device, dtype=dtype)
+    target_instances = target_instance_labels[target_valid]
+    target_groups = target_group_labels[target_valid]
+    distances = (source.unsqueeze(1) - target.unsqueeze(0)).square().mean(dim=-1)
+    nearest = distances.argmin(dim=1)
+    overall_accuracy = (target_instances[nearest] == source_instances).to(dtype).mean()
+
+    same_values: list[torch.Tensor] = []
+    other_values: list[torch.Tensor] = []
+    hard_same_values: list[torch.Tensor] = []
+    hard_other_values: list[torch.Tensor] = []
+    hard_hits: list[torch.Tensor] = []
+    for row in range(source.shape[0]):
+        same = target_instances == source_instances[row]
+        other = ~same
+        if bool(same.any().item()):
+            same_distance = distances[row, same].min()
+        else:
+            same_distance = _zero(dtype, device)
+        same_values.append(same_distance)
+        other_values.append(distances[row, other].min() if bool(other.any().item()) else _zero(dtype, device))
+
+        same_group = target_groups == source_groups[row]
+        hard_other = same_group & other
+        hard_pool = same_group & (same | hard_other)
+        if bool(same.any().item()) and bool(hard_other.any().item()) and bool(hard_pool.any().item()):
+            hard_nearest = distances[row].masked_fill(~hard_pool, float("inf")).argmin()
+            hard_hits.append((target_instances[hard_nearest] == source_instances[row]).to(dtype))
+            hard_same_values.append(same_distance)
+            hard_other_values.append(distances[row, hard_other].min())
+
+    same_distance = torch.stack(same_values).mean() if same_values else _zero(dtype, device)
+    other_distance = torch.stack(other_values).mean() if other_values else _zero(dtype, device)
+    if hard_hits:
+        hard_accuracy = torch.stack(hard_hits).mean()
+        hard_same_distance = torch.stack(hard_same_values).mean()
+        hard_other_distance = torch.stack(hard_other_values).mean()
+        hard_valid_fraction = torch.tensor(
+            len(hard_hits) / max(1, source.shape[0]),
+            dtype=dtype,
+            device=device,
+        )
+    else:
+        hard_accuracy = _zero(dtype, device)
+        hard_same_distance = _zero(dtype, device)
+        hard_other_distance = _zero(dtype, device)
+        hard_valid_fraction = _zero(dtype, device)
+
+    return {
+        "instance_match_accuracy": overall_accuracy,
+        "instance_match_margin": other_distance - same_distance,
+        "instance_same_distance": same_distance,
+        "instance_nearest_other_distance": other_distance,
+        "instance_hard_match_accuracy": hard_accuracy,
+        "instance_hard_margin": hard_other_distance - hard_same_distance,
+        "instance_hard_same_distance": hard_same_distance,
+        "instance_nearest_same_group_other_distance": hard_other_distance,
+        "instance_hard_valid_fraction": hard_valid_fraction,
+    }
+
+
 def ternary_axis_specialization(
     ternary: torch.Tensor,
     labels: torch.Tensor,

@@ -36,6 +36,10 @@ class TsmConfig:
     memory_definition_scale: float = 0.75
     reappearance_alignment_weight: float = 0.0
     reappearance_alignment_temperature: float = 0.25
+    object_cycle_weight: float = 0.0
+    object_cycle_temperature: float = 0.25
+    object_cycle_pair_weight: float = 0.25
+    object_cycle_file_weight: float = 0.25
 
 
 @dataclass

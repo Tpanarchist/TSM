@@ -275,6 +275,11 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                 handle.write(f"- final_reappeared_paired_ternary_match_accuracy: {last_metrics['reappeared_paired_feature_match_accuracy']:.3f}\n")
                 handle.write(f"- final_reappeared_paired_base_ternary_match_accuracy: {last_metrics['reappeared_base_paired_feature_match_accuracy']:.3f}\n")
                 handle.write(f"- final_reappeared_paired_memory_definition_match_delta: {last_metrics['reappeared_paired_memory_definition_match_delta']:.3f}\n")
+            if "reappeared_file_instance_match_accuracy" in last_metrics:
+                handle.write(f"- final_reappeared_file_instance_match_accuracy: {last_metrics['reappeared_file_instance_match_accuracy']:.3f}\n")
+                handle.write(f"- final_reappeared_file_hard_instance_match_accuracy: {last_metrics['reappeared_file_instance_hard_match_accuracy']:.3f}\n")
+                handle.write(f"- final_reappeared_target_file_instance_match_accuracy: {last_metrics['reappeared_target_file_instance_match_accuracy']:.3f}\n")
+                handle.write(f"- final_reappeared_target_file_hard_instance_match_accuracy: {last_metrics['reappeared_target_file_instance_hard_match_accuracy']:.3f}\n")
             if "occluded_memory_object_feature_probe_accuracy" in last_metrics:
                 handle.write(f"- final_occluded_memory_object_probe_accuracy: {last_metrics['occluded_memory_object_feature_probe_accuracy']:.3f}\n")
                 handle.write(f"- final_occluded_memory_object_centroid_separation: {last_metrics['occluded_memory_object_feature_centroid_separation']:.3f}\n")
@@ -455,9 +460,10 @@ def run_seed_sweep(
         handle.write(
             "| seed | condition | heldout_total | heldout_prediction | probe | "
             "occluded_probe | occluded_base | bridge_delta | reappear_match | "
-            "reappear_pair | memory_def_impact | mi | nonzero | axis_usage | run |\n"
+            "reappear_pair | file_instance | file_hard | target_file_instance | "
+            "memory_def_impact | mi | nonzero | axis_usage | run |\n"
         )
-        handle.write("|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
+        handle.write("|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
         for row in rows:
             heldout = row["heldout"]
             axis = row["axis_diagnostics"]
@@ -472,6 +478,9 @@ def run_seed_sweep(
                 f"{_metric(heldout, 'occluded_memory_definition_object_probe_delta'):.3f} | "
                 f"{_metric(heldout, 'reappeared_feature_match_accuracy'):.3f} | "
                 f"{_metric(heldout, 'reappeared_paired_feature_match_accuracy'):.3f} | "
+                f"{_metric(heldout, 'reappeared_file_instance_match_accuracy'):.3f} | "
+                f"{_metric(heldout, 'reappeared_file_instance_hard_match_accuracy'):.3f} | "
+                f"{_metric(heldout, 'reappeared_target_file_instance_match_accuracy'):.3f} | "
                 f"{_metric(heldout, 'memory_definition_prediction_occluded_impact_mean'):.6f} | "
                 f"{_metric(axis, 'ternary_mode_mutual_information'):.3f} | "
                 f"{_metric(heldout, 'ternary_nonzero_fraction'):.3f} | "
