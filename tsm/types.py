@@ -102,6 +102,7 @@ class TrainOutput:
     context: ContextOutput
     sae: SaeOutput
     ternary: torch.Tensor
+    latent_state: torch.Tensor
 
 
 @dataclass

@@ -67,6 +67,10 @@ def test_forward_train_returns_loss_dict_and_images():
     assert torch.allclose(ternary_total, torch.tensor(1.0), atol=1e-6)
     assert out.recon_image.shape == (2, 1, 16, 16)
     assert out.next_image.shape == (2, 1, 16, 16)
+    assert out.latent_state.shape == (2, 8, 32)
+    impacts = model.ternary_prediction_impacts(out, batch["image_tp1"])
+    assert impacts.shape == (4,)
+    assert torch.all(impacts >= 0)
 
 
 def test_tick_has_no_embodiment_action():

@@ -44,10 +44,23 @@ class DatasetConfig:
 
 
 @dataclass
+class DefinitionHardeningConfig:
+    enabled: bool = True
+    min_usage: float = 0.05
+    max_usage: float = 0.95
+    min_stability: float = 0.9
+    min_mode_mutual_information: float = 0.02
+    min_prediction_impact: float = 1e-7
+    harden_after_windows: int = 3
+    recent_window_limit: int = 8
+
+
+@dataclass
 class TrainConfig:
     run_name: str = "tsm_run"
     model: TsmConfig = field(default_factory=TsmConfig)
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
+    definition_hardening: DefinitionHardeningConfig = field(default_factory=DefinitionHardeningConfig)
     batch_size: int = 64
     max_steps: int = 500
     learning_rate: float = 3e-4
@@ -73,7 +86,8 @@ class TrainConfig:
             model_raw["ternary_activation_weight"] = model_raw.pop("ternary_sparsity_weight")
         model = TsmConfig(**model_raw)
         dataset = DatasetConfig(**raw.pop("dataset", {}))
-        return cls(model=model, dataset=dataset, **raw)
+        definition_hardening = DefinitionHardeningConfig(**raw.pop("definition_hardening", {}))
+        return cls(model=model, dataset=dataset, definition_hardening=definition_hardening, **raw)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

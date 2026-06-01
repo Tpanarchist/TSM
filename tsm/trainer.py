@@ -17,6 +17,7 @@ from tqdm import tqdm
 from .config import DatasetConfig, TrainConfig, TsmConfig
 from .data import make_dataset
 from .diagnostics import ternary_axis_specialization, ternary_label_diagnostics
+from .hardening import DefinitionEvidenceTracker
 from .self_field import Self
 
 
@@ -128,6 +129,11 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
     loader = DataLoader(dataset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers)
     model = Self(cfg.model).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
+    definition_tracker = (
+        DefinitionEvidenceTracker(cfg.definition_hardening, cfg.model.definitions_per_context)
+        if cfg.definition_hardening.enabled
+        else None
+    )
     start_step = 0
     best = math.inf
     if resume:
@@ -154,6 +160,12 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
         output.total_loss.backward()
         if cfg.grad_clip:
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+        hardening_metrics: dict[str, float] = {}
+        if should_record and definition_tracker is not None:
+            mode = batch.get("mode", batch.get("label"))
+            if mode is not None:
+                impacts = model.ternary_prediction_impacts(output, batch["image_tp1"])
+                hardening_metrics = definition_tracker.update(step, output.ternary, mode, impacts)
         optimizer.step()
         last_output = output
         metrics = {
@@ -161,6 +173,7 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
             "total": float(output.total_loss.detach().cpu()),
             **scalar_losses(output.losses),
             **scalar_tensors(output.diagnostics),
+            **hardening_metrics,
         }
         first_metrics = first_metrics or metrics
         last_metrics = metrics
@@ -212,6 +225,15 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                 handle.write(f"- final_ternary_context_mutual_information: {last_metrics['ternary_context_mutual_information']:.3f}\n")
                 handle.write(f"- final_ternary_axis_usage_count: {last_metrics['ternary_axis_usage_count']:.1f}\n")
                 handle.write(f"- final_ternary_axis_stability: {last_metrics['ternary_axis_stability']:.3f}\n")
+            if "definition_hardened_count" in last_metrics:
+                handle.write(f"- final_definition_candidate_count: {last_metrics['definition_candidate_count']:.1f}\n")
+                handle.write(f"- final_definition_hardened_count: {last_metrics['definition_hardened_count']:.1f}\n")
+                handle.write(f"- final_definition_ready_window_count: {last_metrics['definition_ready_window_count']:.1f}\n")
+                handle.write(f"- final_definition_mean_ready_mode_mi: {last_metrics['definition_mean_ready_mode_mi']:.3f}\n")
+                handle.write(f"- final_definition_mean_ready_prediction_impact: {last_metrics['definition_mean_ready_prediction_impact']:.6f}\n")
+    if definition_tracker is not None:
+        with open(run_dir / "definition_evidence.json", "w", encoding="utf-8") as handle:
+            json.dump(definition_tracker.to_dict(), handle, indent=2, sort_keys=True)
     return run_dir
 
 

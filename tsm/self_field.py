@@ -199,7 +199,26 @@ class Self(nn.Module):
             context=context,
             sae=sae,
             ternary=ternary,
+            latent_state=q,
         )
+
+    @torch.no_grad()
+    def ternary_prediction_impacts(self, output: TrainOutput, image_tp1: torch.Tensor) -> torch.Tensor:
+        axis_count = output.ternary.shape[-1]
+        if not self.cfg.use_ternary_conditioning:
+            return torch.zeros(axis_count, dtype=output.ternary.dtype, device=output.ternary.device)
+        base_error = (output.next_image.detach() - image_tp1).square().flatten(1).mean(dim=1)
+        impacts: list[torch.Tensor] = []
+        latent = output.latent_state.detach()
+        context_embedding = output.context.embedding.detach()
+        ternary = output.ternary.detach()
+        for axis in range(axis_count):
+            ablated = ternary.clone()
+            ablated[:, axis] = 0
+            prediction = self.reality.predict_next_image(latent, context_embedding, ablated)
+            ablated_error = (prediction - image_tp1).square().flatten(1).mean(dim=1)
+            impacts.append((ablated_error - base_error).clamp_min(0.0).mean())
+        return torch.stack(impacts) if impacts else torch.zeros(0, dtype=output.ternary.dtype, device=output.ternary.device)
 
     @torch.no_grad()
     def tick(self, raw_inputs: torch.Tensor | dict[str, torch.Tensor]) -> TickOutput:
