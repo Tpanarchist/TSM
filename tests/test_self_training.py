@@ -1,7 +1,7 @@
 import torch
 
 from tsm.config import TsmConfig
-from tsm.self_field import Self, _active_file_candidate_mask
+from tsm.self_field import Self, _active_file_candidate_mask, _active_file_gate_input_dim, _active_file_gate_logits
 
 
 def test_forward_train_returns_loss_dict_and_images():
@@ -111,6 +111,42 @@ def test_active_file_candidate_mask_supports_wrapped_positions():
     assert bool(wrapped[0, 0].item())
 
 
+def test_active_file_gate_accepts_context_features():
+    cfg = TsmConfig(
+        d_model=32,
+        workspace_latents=8,
+        contexts=3,
+        definitions_per_context=4,
+        image_size=16,
+        image_channels=1,
+        patch_size=4,
+        attention_heads=4,
+        inference_steps=1,
+        learned_active_file_gate_context_features=True,
+    )
+    model = Self(cfg)
+    query = torch.rand(2, cfg.definitions_per_context)
+    files = torch.rand(2, cfg.definitions_per_context)
+    confidence = torch.ones(2, 1)
+    age = torch.zeros(2, 1)
+    query_context = torch.softmax(torch.rand(2, cfg.contexts), dim=-1)
+    file_context = torch.softmax(torch.rand(2, cfg.contexts), dim=-1)
+
+    assert model.active_file_gate[0].in_features == _active_file_gate_input_dim(cfg)
+    logits = _active_file_gate_logits(
+        model.active_file_gate,
+        query,
+        files,
+        confidence,
+        age,
+        8.0,
+        query_context,
+        file_context,
+    )
+
+    assert logits.shape == (2, 2)
+
+
 def test_forward_train_reports_temporal_object_diagnostics():
     cfg = TsmConfig(
         d_model=32,
@@ -122,6 +158,7 @@ def test_forward_train_reports_temporal_object_diagnostics():
         patch_size=4,
         attention_heads=4,
         inference_steps=1,
+        learned_active_file_gate_context_features=True,
     )
     model = Self(cfg)
     batch = {

@@ -190,6 +190,13 @@ def _candidate_masked_query_loss(
     return torch.stack(losses).mean() if losses else _zero_like_scalar(query)
 
 
+def _active_file_gate_input_dim(cfg: TsmConfig) -> int:
+    dim = cfg.definitions_per_context * 4 + 2
+    if cfg.learned_active_file_gate_context_features:
+        dim += cfg.contexts * 3
+    return dim
+
+
 def _active_file_gate_logits(
     gate: nn.Module,
     query: torch.Tensor,
@@ -197,10 +204,14 @@ def _active_file_gate_logits(
     file_confidence: torch.Tensor,
     file_age: torch.Tensor,
     age_scale: float,
+    query_context: torch.Tensor | None = None,
+    file_context: torch.Tensor | None = None,
 ) -> torch.Tensor:
     if query.numel() == 0 or files.numel() == 0:
         return torch.zeros((0, 0), dtype=query.dtype, device=query.device)
     count = min(query.shape[0], files.shape[0], file_confidence.shape[0], file_age.shape[0])
+    if query_context is not None and file_context is not None:
+        count = min(count, query_context.shape[0], file_context.shape[0])
     query = query[:count]
     files = files[:count].to(device=query.device, dtype=query.dtype)
     confidence = file_confidence[:count].view(1, count, 1).to(device=query.device, dtype=query.dtype)
@@ -210,17 +221,25 @@ def _active_file_gate_logits(
     file_pairs = files.unsqueeze(0).expand(count, count, -1)
     confidence_pairs = confidence.expand(count, count, -1)
     age_pairs = age.expand(count, count, -1)
-    features = torch.cat(
-        [
-            query_pairs,
-            file_pairs,
-            (query_pairs - file_pairs).abs(),
-            query_pairs * file_pairs,
-            confidence_pairs,
-            age_pairs,
-        ],
-        dim=-1,
-    )
+    feature_parts = [
+        query_pairs,
+        file_pairs,
+        (query_pairs - file_pairs).abs(),
+        query_pairs * file_pairs,
+        confidence_pairs,
+        age_pairs,
+    ]
+    if query_context is not None and file_context is not None:
+        query_context = query_context[:count].to(device=query.device, dtype=query.dtype)
+        file_context = file_context[:count].to(device=query.device, dtype=query.dtype)
+        query_context_pairs = query_context.unsqueeze(1).expand(count, count, -1)
+        file_context_pairs = file_context.unsqueeze(0).expand(count, count, -1)
+        feature_parts.extend([
+            query_context_pairs,
+            file_context_pairs,
+            (query_context_pairs - file_context_pairs).abs(),
+        ])
+    features = torch.cat(feature_parts, dim=-1)
     return gate(features).squeeze(-1)
 
 
@@ -348,7 +367,7 @@ class Self(nn.Module):
         self.sae = SAE(self.cfg)
         self.contexts = ContextRouter(self.cfg)
         self.defs = DefinitionBank(self.cfg)
-        gate_input = self.cfg.definitions_per_context * 4 + 2
+        gate_input = _active_file_gate_input_dim(self.cfg)
         gate_hidden = max(16, self.cfg.definitions_per_context * 2)
         self.active_file_gate = nn.Sequential(
             nn.Linear(gate_input, gate_hidden),
@@ -640,9 +659,16 @@ class Self(nn.Module):
                         )
                         gate_query_scores = target_query_scores
                         gate_file_scores = target_file_scores
+                        gate_query_context = target_context_probs
+                        gate_file_context = context.probs[reappeared_for_alignment]
                         if self.cfg.learned_active_file_gate_detach_inputs:
                             gate_query_scores = gate_query_scores.detach()
                             gate_file_scores = gate_file_scores.detach()
+                            gate_query_context = gate_query_context.detach()
+                            gate_file_context = gate_file_context.detach()
+                        if not self.cfg.learned_active_file_gate_context_features:
+                            gate_query_context = None
+                            gate_file_context = None
                         learned_logits = _active_file_gate_logits(
                             self.active_file_gate,
                             gate_query_scores,
@@ -650,6 +676,8 @@ class Self(nn.Module):
                             memory_definition_confidence[reappeared_for_alignment],
                             memory_read.age[reappeared_for_alignment],
                             self.cfg.active_file_candidate_max_age,
+                            gate_query_context,
+                            gate_file_context,
                         )
                         if learned_logits.numel() > 0:
                             count = min(learned_logits.shape[0], learned_logits.shape[1], active_candidates.shape[0])
@@ -1146,6 +1174,12 @@ class Self(nn.Module):
                                     memory_definition_confidence[reappeared_active],
                                     memory_read.age[reappeared_active],
                                     self.cfg.active_file_candidate_max_age,
+                                    target_context_probs
+                                    if self.cfg.learned_active_file_gate_context_features
+                                    else None,
+                                    context.probs[reappeared_active]
+                                    if self.cfg.learned_active_file_gate_context_features
+                                    else None,
                                 )
                                 file_valid = (
                                     memory_read.position_valid[reappeared_active]

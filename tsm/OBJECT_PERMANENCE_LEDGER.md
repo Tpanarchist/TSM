@@ -124,3 +124,31 @@ A fresh CLI run with top-k 10 saved in `runs/20260601_163012_temporal_objects_le
 - latest checkpoint ternary nonzero fraction: `0.078`
 
 This makes the current result mixed. Detaching the learned-gate teacher loss prevents the DefinitionBank from becoming a dense feature bus. Top-k 10 gives full row coverage. But the learned gate still does not reliably improve exact lookup while preserving the occluded Definition bridge. The next mechanism needs better learned gate inputs or scoring structure, not more pressure on ternary activations.
+
+## Context-Aware Learned Gate Result
+
+Run: `runs/20260601_164308_temporal_objects_learned_active_file_gate`
+
+This run adds model-internal context features to the learned active-file gate. The learned scorer receives the visible reappearance context, the hidden/source context attached to each candidate file, and their difference. It still does not receive raw position metadata, and the learned-gate teacher loss remains detached from Definition/query scores.
+
+Best checkpoint:
+
+- learned target recall: `0.844`
+- learned row coverage: `1.000`
+- learned exact / hard match: `0.313` / `0.556`
+- learned/scaffold recall: `0.818`
+- learned/scaffold precision: `0.584`
+- occluded bridge: `+0.211`
+- ternary nonzero fraction: `0.040`
+
+Latest checkpoint:
+
+- learned target recall: `0.834`
+- learned row coverage: `1.000`
+- learned exact / hard match: `0.313` / `0.527`
+- learned/scaffold recall: `0.803`
+- learned/scaffold precision: `0.573`
+- occluded bridge: `+0.287`
+- ternary nonzero fraction: `0.064`
+
+This is a partial positive result. Compared with the prior fresh detached top-k 10 run, the context-aware gate improves learned target recall, hard same-class matching, scaffold agreement, and occluded bridge preservation while keeping the ternary code sparse. It still does not beat the scaffolded active gate, and the best-vs-latest split shows the same underlying tension: the checkpoint with strongest candidate discrimination is not the checkpoint with the strongest hidden Definition bridge. The next target is still a learned expectation/gating mechanism that preserves the bridge while improving exact reappearance binding.

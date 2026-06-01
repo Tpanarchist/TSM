@@ -56,3 +56,4 @@ model:
   learned_active_file_gate_topk: 10
   learned_active_file_gate_threshold: 0.5
   learned_active_file_gate_detach_inputs: true
+  learned_active_file_gate_context_features: true
