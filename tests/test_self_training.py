@@ -12,6 +12,8 @@ from tsm.self_field import (
     _active_file_feature_only_candidate_mask,
     _active_file_gate_input_dim,
     _active_file_gate_logits,
+    _local_reappearance_images,
+    _state_prediction_error_matrix,
 )
 
 
@@ -139,6 +141,31 @@ def test_active_file_feature_only_candidate_mask_uses_valid_files():
         ]
     )
     assert torch.equal(mask, expected)
+
+
+def test_local_reappearance_images_focuses_candidate_regions():
+    cfg = TsmConfig(image_size=8, active_file_candidate_wrap=False)
+    image = torch.full((1, 1, 8, 8), 0.02)
+    image[0, 0, 1, 1] = 1.0
+    image[0, 0, 6, 6] = 0.8
+    positions = torch.tensor([[1.0, 1.0], [6.0, 6.0]])
+
+    local = _local_reappearance_images(image, positions, cfg)
+
+    assert local.shape == (2, 1, 8, 8)
+    assert local[0, 0, 1, 1] > local[0, 0, 6, 6]
+    assert local[1, 0, 6, 6] > local[1, 0, 1, 1]
+
+
+def test_state_prediction_error_matrix_scores_expected_states():
+    actual = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+    expected = torch.tensor([[1.0, 0.1], [0.1, 1.0]])
+
+    errors = _state_prediction_error_matrix(actual, expected)
+
+    assert errors.shape == (2, 2)
+    assert errors[0, 0] < errors[0, 1]
+    assert errors[1, 1] < errors[1, 0]
 
 
 def test_active_file_gate_accepts_context_features():
@@ -279,6 +306,7 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "image_tp1": torch.rand(5, 1, 16, 16),
         "dataset_id": torch.zeros(5, dtype=torch.long),
         "sequence_id": torch.zeros(5, dtype=torch.long),
+        "object_file_id": torch.tensor([0, 1, 2, 3, 0], dtype=torch.long),
         "mode": torch.tensor([0, 1, 2, 2, 3], dtype=torch.long),
         "phase": torch.tensor([0, 1, 2, 3, 4], dtype=torch.long),
         "object_id": torch.tensor([0, 1, 2, 3, 0], dtype=torch.long),
@@ -300,6 +328,10 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "object_ternary_mode_probe_accuracy",
         "occluded_object_ternary_mode_probe_accuracy",
         "temporal_visible_fraction",
+        "object_file_id_storage_key_present",
+        "object_file_id_bind_time_candidate_filter_usage",
+        "object_file_id_bind_time_leakage_audit_pass",
+        "object_file_id_auxiliary_label_usage",
         "temporal_occluded_fraction",
         "temporal_reappeared_fraction",
         "temporal_sae_occlusion_delta",
@@ -362,6 +394,14 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_active_query_file_candidate_mean_count",
         "reappeared_active_query_file_candidate_row_coverage_fraction",
         "reappeared_active_query_file_candidate_target_recall_fraction",
+        "reappeared_active_state_prediction_error_query_file_candidate_error_match_accuracy",
+        "reappeared_active_state_prediction_error_query_file_candidate_error_hard_match_accuracy",
+        "reappeared_active_state_prediction_error_query_file_candidate_row_coverage_fraction",
+        "reappeared_active_state_prediction_error_query_file_candidate_target_recall_fraction",
+        "reappeared_active_local_prediction_error_query_file_candidate_error_match_accuracy",
+        "reappeared_active_local_prediction_error_query_file_candidate_error_hard_match_accuracy",
+        "reappeared_active_local_prediction_error_query_file_candidate_row_coverage_fraction",
+        "reappeared_active_local_prediction_error_query_file_candidate_target_recall_fraction",
         "reappeared_oracle_position_query_file_candidate_instance_match_accuracy",
         "reappeared_oracle_position_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_oracle_position_query_file_candidate_row_coverage_fraction",
@@ -370,10 +410,14 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_predicted_position_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_predicted_position_query_file_candidate_row_coverage_fraction",
         "reappeared_predicted_position_query_file_candidate_target_recall_fraction",
+        "reappeared_predicted_position_state_prediction_error_query_file_candidate_error_match_accuracy",
+        "reappeared_predicted_position_local_prediction_error_query_file_candidate_error_match_accuracy",
         "reappeared_feature_only_query_file_candidate_instance_match_accuracy",
         "reappeared_feature_only_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_feature_only_query_file_candidate_row_coverage_fraction",
         "reappeared_feature_only_query_file_candidate_target_recall_fraction",
+        "reappeared_feature_only_state_prediction_error_query_file_candidate_error_match_accuracy",
+        "reappeared_feature_only_local_prediction_error_query_file_candidate_error_match_accuracy",
         "reappeared_feature_only_position_ablated_query_file_candidate_instance_match_accuracy",
         "reappeared_feature_only_position_ablated_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_feature_only_position_ablated_query_file_candidate_row_coverage_fraction",
@@ -383,10 +427,17 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_learned_active_query_file_candidate_mean_count",
         "reappeared_learned_active_query_file_candidate_row_coverage_fraction",
         "reappeared_learned_active_query_file_candidate_target_recall_fraction",
+        "reappeared_learned_active_state_prediction_error_query_file_candidate_error_match_accuracy",
+        "reappeared_learned_active_state_prediction_error_query_file_candidate_error_hard_match_accuracy",
+        "reappeared_learned_active_local_prediction_error_query_file_candidate_error_match_accuracy",
+        "reappeared_learned_active_local_prediction_error_query_file_candidate_error_hard_match_accuracy",
         "reappeared_learned_active_file_gate_active_recall",
     }
     assert torch.allclose(out.diagnostics["temporal_visible_fraction"], torch.tensor(0.6), atol=1e-6)
     assert torch.allclose(out.diagnostics["temporal_occluded_fraction"], torch.tensor(0.4), atol=1e-6)
+    assert out.diagnostics["object_file_id_bind_time_leakage_audit_pass"].item() == 1.0
+    assert out.diagnostics["object_file_id_bind_time_candidate_filter_usage"].item() == 0.0
+    assert out.diagnostics["object_file_id_auxiliary_label_usage"].item() == 1.0
 
     dynamics_features = _active_file_dynamics_features(
         batch,

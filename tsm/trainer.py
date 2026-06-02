@@ -334,24 +334,46 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                     handle.write(f"- final_reappeared_active_query_file_candidate_mean_count: {last_metrics['reappeared_active_query_file_candidate_mean_count']:.3f}\n")
                     handle.write(f"- final_reappeared_active_query_file_row_coverage: {last_metrics['reappeared_active_query_file_candidate_row_coverage_fraction']:.3f}\n")
                     handle.write(f"- final_reappeared_active_query_file_target_recall: {last_metrics['reappeared_active_query_file_candidate_target_recall_fraction']:.3f}\n")
+                if "object_file_id_bind_time_leakage_audit_pass" in last_metrics:
+                    handle.write(f"- final_object_file_id_bind_time_leakage_audit_pass: {last_metrics['object_file_id_bind_time_leakage_audit_pass']:.1f}\n")
+                    handle.write(f"- final_object_file_id_candidate_filter_usage: {last_metrics['object_file_id_bind_time_candidate_filter_usage']:.1f}\n")
+                    handle.write(f"- final_object_file_id_auxiliary_label_usage: {last_metrics['object_file_id_auxiliary_label_usage']:.1f}\n")
+                if "reappeared_active_state_prediction_error_query_file_candidate_error_match_accuracy" in last_metrics:
+                    handle.write(f"- final_reappeared_active_state_prediction_error_match_accuracy: {last_metrics['reappeared_active_state_prediction_error_query_file_candidate_error_match_accuracy']:.3f}\n")
+                    handle.write(f"- final_reappeared_active_state_prediction_error_hard_match_accuracy: {last_metrics['reappeared_active_state_prediction_error_query_file_candidate_error_hard_match_accuracy']:.3f}\n")
+                if "reappeared_active_local_prediction_error_query_file_candidate_error_match_accuracy" in last_metrics:
+                    handle.write(f"- final_reappeared_active_local_prediction_error_match_accuracy: {last_metrics['reappeared_active_local_prediction_error_query_file_candidate_error_match_accuracy']:.3f}\n")
+                    handle.write(f"- final_reappeared_active_local_prediction_error_hard_match_accuracy: {last_metrics['reappeared_active_local_prediction_error_query_file_candidate_error_hard_match_accuracy']:.3f}\n")
                 if "reappeared_oracle_position_query_file_candidate_instance_match_accuracy" in last_metrics:
                     handle.write(f"- final_reappeared_oracle_position_query_file_match_accuracy: {last_metrics['reappeared_oracle_position_query_file_candidate_instance_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_oracle_position_query_file_hard_match_accuracy: {last_metrics['reappeared_oracle_position_query_file_candidate_instance_hard_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_oracle_position_query_file_target_recall: {last_metrics['reappeared_oracle_position_query_file_candidate_target_recall_fraction']:.3f}\n")
+                if "reappeared_oracle_position_state_prediction_error_query_file_candidate_error_match_accuracy" in last_metrics:
+                    handle.write(f"- final_reappeared_oracle_position_state_prediction_error_match_accuracy: {last_metrics['reappeared_oracle_position_state_prediction_error_query_file_candidate_error_match_accuracy']:.3f}\n")
+                    handle.write(f"- final_reappeared_oracle_position_local_prediction_error_match_accuracy: {last_metrics['reappeared_oracle_position_local_prediction_error_query_file_candidate_error_match_accuracy']:.3f}\n")
                 if "reappeared_predicted_position_query_file_candidate_instance_match_accuracy" in last_metrics:
                     handle.write(f"- final_reappeared_predicted_position_query_file_match_accuracy: {last_metrics['reappeared_predicted_position_query_file_candidate_instance_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_predicted_position_query_file_hard_match_accuracy: {last_metrics['reappeared_predicted_position_query_file_candidate_instance_hard_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_predicted_position_query_file_target_recall: {last_metrics['reappeared_predicted_position_query_file_candidate_target_recall_fraction']:.3f}\n")
+                if "reappeared_predicted_position_state_prediction_error_query_file_candidate_error_match_accuracy" in last_metrics:
+                    handle.write(f"- final_reappeared_predicted_position_state_prediction_error_match_accuracy: {last_metrics['reappeared_predicted_position_state_prediction_error_query_file_candidate_error_match_accuracy']:.3f}\n")
+                    handle.write(f"- final_reappeared_predicted_position_local_prediction_error_match_accuracy: {last_metrics['reappeared_predicted_position_local_prediction_error_query_file_candidate_error_match_accuracy']:.3f}\n")
                 if "reappeared_feature_only_query_file_candidate_instance_match_accuracy" in last_metrics:
                     handle.write(f"- final_reappeared_feature_only_query_file_match_accuracy: {last_metrics['reappeared_feature_only_query_file_candidate_instance_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_feature_only_query_file_hard_match_accuracy: {last_metrics['reappeared_feature_only_query_file_candidate_instance_hard_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_feature_only_query_file_target_recall: {last_metrics['reappeared_feature_only_query_file_candidate_target_recall_fraction']:.3f}\n")
+                if "reappeared_feature_only_state_prediction_error_query_file_candidate_error_match_accuracy" in last_metrics:
+                    handle.write(f"- final_reappeared_feature_only_state_prediction_error_match_accuracy: {last_metrics['reappeared_feature_only_state_prediction_error_query_file_candidate_error_match_accuracy']:.3f}\n")
+                    handle.write(f"- final_reappeared_feature_only_local_prediction_error_match_accuracy: {last_metrics['reappeared_feature_only_local_prediction_error_query_file_candidate_error_match_accuracy']:.3f}\n")
                 if "reappeared_learned_active_query_file_candidate_instance_match_accuracy" in last_metrics:
                     handle.write(f"- final_reappeared_learned_active_query_file_match_accuracy: {last_metrics['reappeared_learned_active_query_file_candidate_instance_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_learned_active_query_file_hard_match_accuracy: {last_metrics['reappeared_learned_active_query_file_candidate_instance_hard_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_learned_active_query_file_candidate_mean_count: {last_metrics['reappeared_learned_active_query_file_candidate_mean_count']:.3f}\n")
                     handle.write(f"- final_reappeared_learned_active_query_file_row_coverage: {last_metrics['reappeared_learned_active_query_file_candidate_row_coverage_fraction']:.3f}\n")
                     handle.write(f"- final_reappeared_learned_active_query_file_target_recall: {last_metrics['reappeared_learned_active_query_file_candidate_target_recall_fraction']:.3f}\n")
+                    if "reappeared_learned_active_state_prediction_error_query_file_candidate_error_match_accuracy" in last_metrics:
+                        handle.write(f"- final_reappeared_learned_active_state_prediction_error_match_accuracy: {last_metrics['reappeared_learned_active_state_prediction_error_query_file_candidate_error_match_accuracy']:.3f}\n")
+                        handle.write(f"- final_reappeared_learned_active_local_prediction_error_match_accuracy: {last_metrics['reappeared_learned_active_local_prediction_error_query_file_candidate_error_match_accuracy']:.3f}\n")
                     if "reappeared_learned_active_file_gate_active_recall" in last_metrics:
                         handle.write(f"- final_reappeared_learned_active_gate_active_recall: {last_metrics['reappeared_learned_active_file_gate_active_recall']:.3f}\n")
             if "occluded_memory_object_feature_probe_accuracy" in last_metrics:

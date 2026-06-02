@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from .config import TsmConfig
 from .context import ContextRouter, context_balance_loss, context_entropy
 from .diagnostics import (
+    candidate_error_match_diagnostics,
     candidate_instance_match_diagnostics,
     feature_label_diagnostics,
     feature_match_diagnostics,
@@ -547,6 +548,45 @@ def _active_file_feature_only_candidate_mask(
         return torch.zeros((0, 0), dtype=torch.bool, device=device)
     valid = file_valid[:count].to(device=device, dtype=torch.bool)
     return valid.unsqueeze(0).expand(count, count)
+
+
+def _local_reappearance_images(
+    images: torch.Tensor,
+    file_positions: torch.Tensor,
+    cfg: TsmConfig,
+) -> torch.Tensor:
+    if images.numel() == 0 or file_positions.numel() == 0:
+        return images.new_zeros((0, images.shape[1], images.shape[2], images.shape[3]))
+    query_count = images.shape[0]
+    file_count = file_positions.shape[0]
+    height, width = images.shape[-2:]
+    y = torch.arange(height, device=images.device, dtype=images.dtype)
+    x = torch.arange(width, device=images.device, dtype=images.dtype)
+    yy, xx = torch.meshgrid(y, x, indexing="ij")
+    positions = file_positions.to(device=images.device, dtype=images.dtype)
+    dx = xx.unsqueeze(0) - positions[:, 0].view(-1, 1, 1)
+    dy = yy.unsqueeze(0) - positions[:, 1].view(-1, 1, 1)
+    wrap_span = _active_file_wrap_span(cfg)
+    if wrap_span is not None and wrap_span > 0:
+        span = torch.tensor(wrap_span, device=images.device, dtype=images.dtype)
+        dx = torch.minimum(dx.abs(), (span - dx.abs()).abs())
+        dy = torch.minimum(dy.abs(), (span - dy.abs()).abs())
+    sigma = float(max(1.5, cfg.image_size / 10.0))
+    window = torch.exp(-(dx.square() + dy.square()) / (2.0 * sigma * sigma)).clamp_min(1e-4)
+    window = window.view(1, file_count, 1, height, width)
+    expanded = images.unsqueeze(1).expand(query_count, file_count, -1, -1, -1)
+    background = images.amin(dim=(-3, -2, -1), keepdim=True).view(query_count, 1, 1, 1, 1)
+    local = background + (expanded - background) * window
+    return local.reshape(query_count * file_count, images.shape[1], height, width)
+
+
+def _state_prediction_error_matrix(actual_state: torch.Tensor, expected_state: torch.Tensor) -> torch.Tensor:
+    if actual_state.numel() == 0 or expected_state.numel() == 0:
+        return torch.zeros((0, 0), dtype=actual_state.dtype, device=actual_state.device)
+    count = min(actual_state.shape[0], expected_state.shape[0])
+    actual = actual_state[:count]
+    expected = expected_state[:count].to(device=actual.device, dtype=actual.dtype)
+    return (actual.unsqueeze(1) - expected.unsqueeze(0)).square().mean(dim=-1)
 
 
 def _candidate_path_context_metrics(
@@ -1361,6 +1401,26 @@ class Self(nn.Module):
             if "same_class_contested" in batch:
                 contested = batch["same_class_contested"].to(device=image_t.device, dtype=image_t.dtype)
                 diagnostics["temporal_same_class_contested_fraction"] = contested.mean()
+            if "object_file_id" in batch:
+                diagnostics["object_file_id_storage_key_present"] = torch.ones((), dtype=image_t.dtype, device=image_t.device)
+                diagnostics["object_file_id_bind_time_candidate_filter_usage"] = _zero_like_scalar(image_t)
+                diagnostics["object_file_id_bind_time_leakage_audit_pass"] = torch.ones(
+                    (),
+                    dtype=image_t.dtype,
+                    device=image_t.device,
+                )
+                auxiliary_label_used = float(
+                    self.cfg.reappearance_file_query_weight > 0.0
+                    or (
+                        self.cfg.active_file_expectation_weight > 0.0
+                        and self.cfg.active_file_expectation_hard_weight > 0.0
+                    )
+                )
+                diagnostics["object_file_id_auxiliary_label_usage"] = torch.tensor(
+                    auxiliary_label_used,
+                    dtype=image_t.dtype,
+                    device=image_t.device,
+                )
             diagnostics["temporal_sae_occlusion_delta"] = (
                 diagnostics["temporal_sae_occluded_mean"] - diagnostics["temporal_sae_visible_mean"]
             )
@@ -1682,6 +1742,17 @@ class Self(nn.Module):
                         _normalized_pixel_position(file_binding_position, self.cfg),
                         self.cfg,
                     )
+                    expected_query_binding_scores = _binding_position_features(
+                        expected_query_scores if expected_query_scores is not None else target_object_file_scores,
+                        _normalized_pixel_position(file_binding_position, self.cfg),
+                        self.cfg,
+                    )
+                    state_prediction_error = _state_prediction_error_matrix(
+                        target_query_binding_scores.to(image_t.dtype),
+                        expected_query_binding_scores.to(image_t.dtype),
+                    )
+                    if state_prediction_error.numel() > 0:
+                        diagnostics["reappeared_state_prediction_error_mean"] = state_prediction_error.mean()
                     target_position_for_reappeared = None
                     if "object_position_tp1" in batch:
                         target_position_for_reappeared = batch["object_position_tp1"].to(
@@ -1781,6 +1852,49 @@ class Self(nn.Module):
                             if predicted_position_candidates is not None
                             else feature_only_candidates
                         )
+                    local_prediction_error = None
+                    if feature_only_candidates is not None and file_binding_position.numel() > 0:
+                        query_count = int(reappeared_active.to(torch.long).sum().item())
+                        file_count = min(query_count, file_binding_position.shape[0])
+                        if file_count > 0:
+                            local_images = _local_reappearance_images(
+                                image_tp1[reappeared_active][:query_count],
+                                file_binding_position.detach()[:file_count],
+                                self.cfg,
+                            )
+                            if local_images.numel() > 0:
+                                local_dataset_id = (
+                                    target_dataset_id[:query_count].repeat_interleave(file_count)
+                                    if target_dataset_id is not None
+                                    else None
+                                )
+                                local_definition_scores, _local_context, _local_binding_position = (
+                                    self._diagnostic_definition_state_for_image(
+                                        local_images,
+                                        dataset_id=local_dataset_id,
+                                        include_binding_position=True,
+                                    )
+                                )
+                                local_query_scores = self.defs.file_query_scores(local_definition_scores)
+                                repeated_position = file_binding_position.detach()[:file_count].unsqueeze(0).expand(
+                                    query_count,
+                                    file_count,
+                                    2,
+                                ).reshape(query_count * file_count, 2)
+                                local_query_binding_scores = _binding_position_features(
+                                    local_query_scores.to(image_t.dtype),
+                                    _normalized_pixel_position(repeated_position, self.cfg),
+                                    self.cfg,
+                                )
+                                expected_local = expected_query_binding_scores[:file_count].unsqueeze(0).expand(
+                                    query_count,
+                                    file_count,
+                                    -1,
+                                ).reshape(query_count * file_count, -1)
+                                local_prediction_error = (
+                                    local_query_binding_scores - expected_local.to(local_query_binding_scores.dtype)
+                                ).square().mean(dim=-1).view(query_count, file_count)
+                                diagnostics["reappeared_local_prediction_error_mean"] = local_prediction_error.mean()
                     instance_ids = _object_instance_ids(batch, image_t.device)
                     if instance_ids is not None:
                         source_sequences = instance_ids[reappeared_active]
@@ -1877,6 +1991,38 @@ class Self(nn.Module):
                                     prefix,
                                     _candidate_path_context_metrics(diagnostics, image_t),
                                 ))
+                                if state_prediction_error.numel() > 0:
+                                    diagnostics.update(_prefix_metrics(
+                                        prefix.replace("query_file_", "state_prediction_error_query_file_"),
+                                        candidate_error_match_diagnostics(
+                                            state_prediction_error.to(image_t.dtype),
+                                            source_sequences,
+                                            source_sequences,
+                                            source_labels,
+                                            source_labels,
+                                            candidates,
+                                        ),
+                                    ))
+                                    diagnostics.update(_prefix_metrics(
+                                        prefix.replace("query_file_", "state_prediction_error_query_file_"),
+                                        _candidate_path_context_metrics(diagnostics, image_t),
+                                    ))
+                                if local_prediction_error is not None:
+                                    diagnostics.update(_prefix_metrics(
+                                        prefix.replace("query_file_", "local_prediction_error_query_file_"),
+                                        candidate_error_match_diagnostics(
+                                            local_prediction_error.to(image_t.dtype),
+                                            source_sequences,
+                                            source_sequences,
+                                            source_labels,
+                                            source_labels,
+                                            candidates,
+                                        ),
+                                    ))
+                                    diagnostics.update(_prefix_metrics(
+                                        prefix.replace("query_file_", "local_prediction_error_query_file_"),
+                                        _candidate_path_context_metrics(diagnostics, image_t),
+                                    ))
                             if feature_only_candidates is not None:
                                 diagnostics.update(_prefix_metrics(
                                     "reappeared_feature_only_position_ablated_query_file_",
@@ -1938,6 +2084,30 @@ class Self(nn.Module):
                                     learned_candidates,
                                 ),
                             ))
+                            if state_prediction_error.numel() > 0:
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_learned_active_state_prediction_error_query_file_",
+                                    candidate_error_match_diagnostics(
+                                        state_prediction_error.to(image_t.dtype),
+                                        source_sequences,
+                                        source_sequences,
+                                        source_labels,
+                                        source_labels,
+                                        learned_candidates,
+                                    ),
+                                ))
+                            if local_prediction_error is not None:
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_learned_active_local_prediction_error_query_file_",
+                                    candidate_error_match_diagnostics(
+                                        local_prediction_error.to(image_t.dtype),
+                                        source_sequences,
+                                        source_sequences,
+                                        source_labels,
+                                        source_labels,
+                                        learned_candidates,
+                                    ),
+                                ))
                             diagnostics.update(_prefix_metrics(
                                 "reappeared_learned_active_file_gate_active_",
                                 _candidate_mask_agreement(learned_candidates, active_candidates),

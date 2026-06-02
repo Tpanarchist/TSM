@@ -1,6 +1,7 @@
 import torch
 
 from tsm.diagnostics import (
+    candidate_error_match_diagnostics,
     candidate_instance_match_diagnostics,
     feature_label_diagnostics,
     feature_match_diagnostics,
@@ -217,6 +218,25 @@ def test_candidate_instance_match_diagnostics_reports_empty_rows():
     assert metrics["candidate_row_coverage_fraction"].item() == 0.5
     assert metrics["candidate_target_recall_fraction"].item() == 0.5
     assert metrics["candidate_mean_count"].item() == 1.0
+
+
+def test_candidate_error_match_diagnostics_uses_lowest_error():
+    errors = torch.tensor(
+        [
+            [0.05, 0.40, 0.60],
+            [0.50, 0.04, 0.30],
+            [0.60, 0.20, 0.03],
+        ]
+    )
+    labels = torch.tensor([0, 1, 2])
+    groups = torch.tensor([0, 0, 0])
+    candidate_mask = torch.ones(3, 3, dtype=torch.bool)
+
+    metrics = candidate_error_match_diagnostics(errors, labels, labels, groups, groups, candidate_mask)
+
+    assert metrics["candidate_error_match_accuracy"].item() == 1.0
+    assert metrics["candidate_error_hard_match_accuracy"].item() == 1.0
+    assert metrics["candidate_error_match_margin"].item() > 0.0
 
 
 def test_position_recoverability_diagnostics_detects_linear_position():

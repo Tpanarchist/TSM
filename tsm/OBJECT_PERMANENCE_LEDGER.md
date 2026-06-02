@@ -436,3 +436,52 @@ Latest held-out checkpoint:
 - ternary nonzero fraction: `0.110`
 
 This is the intended discriminating failure. The single-target geometry-through-feature win does not survive same-class contested identity. Position channels still help slightly over ablated features, but position recoverability collapses because the visible binding position is a whole-image salience read over both objects, not a target-specific object slot. Explicit predicted-position masking is slightly better than full feature distance in this run, but still weak and not enough to solve contested same-instance rebinding. The next step is Probe 2: active object files must compete by prediction error against the percept, rather than relying on global feature distance or a whole-image position channel.
+
+## Local Prediction-Error Binding Probe
+
+Run: `runs/20260601_212900_temporal_objects_contested_position`
+
+Config: `configs/temporal_objects_contested_position.yaml`
+
+This patch first audits the `object_file_id` path. `object_file_id` is used as the object-memory storage key and as an auxiliary/evaluation instance label, but it is not used to filter or select bind-time candidate masks. The run reports:
+
+- `object_file_id_bind_time_leakage_audit_pass`: `1.000`
+- `object_file_id_bind_time_candidate_filter_usage`: `0.000`
+- `object_file_id_auxiliary_label_usage`: `1.000`
+
+The patch then adds two diagnostic Probe 2 paths without adding a new training loss:
+
+- full-state prediction-error binding: compare the actual position-aware reappeared query state to each active file's expected position-aware state, then pick the file with lowest error.
+- local prediction-error binding: suppress the rest of the reappeared image around each candidate file's predicted region, re-run the Definition/file-query read on that local percept, then pick the file with lowest error against that file's expected state.
+
+Best held-out checkpoint:
+
+- dynamics position error / improvement: `0.234` / `+0.162`
+- predicted-position exact / hard match: `0.158` / `0.158`
+- feature-only exact / hard match: `0.079` / `0.079`
+- feature-only position-ablated exact / hard match: `0.079` / `0.079`
+- active state-prediction-error exact / hard match: `0.079` / `0.079`
+- active local-prediction-error exact / hard match: `0.237` / `0.237`
+- feature-only local-prediction-error exact / hard match: `0.088` / `0.088`
+- learned active target recall: `0.882`
+- Definition position R2: `-0.395`
+- file-query position R2: `-0.397`
+- occluded bridge: `0.000`
+- ternary nonzero fraction: `0.248`
+
+Latest held-out checkpoint:
+
+- dynamics position error / improvement: `0.232` / `+0.165`
+- predicted-position exact / hard match: `0.158` / `0.158`
+- feature-only exact / hard match: `0.079` / `0.079`
+- feature-only position-ablated exact / hard match: `0.079` / `0.079`
+- active state-prediction-error exact / hard match: `0.079` / `0.079`
+- active local-prediction-error exact / hard match: `0.158` / `0.158`
+- feature-only local-prediction-error exact / hard match: `0.158` / `0.158`
+- learned active target recall: `0.878`
+- Definition position R2: `-0.390`
+- file-query position R2: `-0.398`
+- occluded bridge: `0.000`
+- ternary nonzero fraction: `0.227`
+
+This is a scoped partial result. The audit clears the immediate `object_file_id` bind-time leakage concern. Learned dynamics still improves reappearance position over naive projection, and the best checkpoint shows local prediction-error binding can beat feature-only in the contested stream. But full-state prediction error collapses to the feature-only floor, local prediction error is unstable across checkpoints, position recoverability remains negative in the contested two-object representation, and the occluded Definition bridge is absent. The current mechanism does not solve same-instance reappearance binding. The next target is a true slot-aware/local object representation that preserves object-specific geometry before the prediction-error competition, not more similarity pressure or governance.

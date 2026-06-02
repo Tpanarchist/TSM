@@ -561,6 +561,128 @@ def candidate_instance_match_diagnostics(
     }
 
 
+def candidate_error_match_diagnostics(
+    error_matrix: torch.Tensor,
+    source_instance_labels: torch.Tensor,
+    target_instance_labels: torch.Tensor,
+    source_group_labels: torch.Tensor,
+    target_group_labels: torch.Tensor,
+    candidate_mask: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    dtype = error_matrix.dtype
+    device = error_matrix.device
+    source_instance_labels = source_instance_labels.to(device=device, dtype=torch.long)
+    target_instance_labels = target_instance_labels.to(device=device, dtype=torch.long)
+    source_group_labels = source_group_labels.to(device=device, dtype=torch.long)
+    target_group_labels = target_group_labels.to(device=device, dtype=torch.long)
+    candidate_mask = candidate_mask.to(device=device, dtype=torch.bool)
+    source_valid = (source_instance_labels >= 0) & (source_group_labels >= 0)
+    target_valid = (target_instance_labels >= 0) & (target_group_labels >= 0)
+    if (
+        error_matrix.numel() == 0
+        or candidate_mask.numel() == 0
+        or not bool(source_valid.any().item())
+        or not bool(target_valid.any().item())
+    ):
+        zero = _zero(dtype, device)
+        return {
+            "candidate_error_match_accuracy": zero,
+            "candidate_error_match_margin": zero,
+            "candidate_error_same": zero,
+            "candidate_error_nearest_other": zero,
+            "candidate_error_hard_match_accuracy": zero,
+            "candidate_error_hard_margin": zero,
+            "candidate_error_hard_same": zero,
+            "candidate_error_nearest_same_group_other": zero,
+            "candidate_error_hard_valid_fraction": zero,
+            "candidate_mean_count": zero,
+            "candidate_target_present_fraction": zero,
+            "candidate_row_coverage_fraction": zero,
+            "candidate_target_recall_fraction": zero,
+        }
+
+    errors = error_matrix.detach().to(dtype)[source_valid][:, target_valid]
+    source_instances = source_instance_labels[source_valid]
+    source_groups = source_group_labels[source_valid]
+    target_instances = target_instance_labels[target_valid]
+    target_groups = target_group_labels[target_valid]
+    candidates = candidate_mask[source_valid][:, target_valid]
+
+    hits: list[torch.Tensor] = []
+    target_present_values: list[torch.Tensor] = []
+    target_recall_values: list[torch.Tensor] = []
+    row_coverage_values: list[torch.Tensor] = []
+    candidate_counts: list[torch.Tensor] = []
+    same_values: list[torch.Tensor] = []
+    other_values: list[torch.Tensor] = []
+    hard_hits: list[torch.Tensor] = []
+    hard_same_values: list[torch.Tensor] = []
+    hard_other_values: list[torch.Tensor] = []
+    for row in range(errors.shape[0]):
+        row_candidates = candidates[row]
+        has_candidates = row_candidates.any()
+        row_coverage_values.append(has_candidates.to(dtype))
+        same = target_instances == source_instances[row]
+        target_present = same & row_candidates
+        target_recall_values.append(target_present.any().to(dtype))
+        if not bool(row_candidates.any().item()):
+            continue
+        candidate_counts.append(row_candidates.to(dtype).sum())
+        other = ~same
+        target_present_values.append(target_present.any().to(dtype))
+        masked_errors = errors[row].masked_fill(~row_candidates, float("inf"))
+        nearest = masked_errors.argmin()
+        hits.append((target_instances[nearest] == source_instances[row]).to(dtype))
+        if bool(target_present.any().item()):
+            same_error = errors[row, target_present].min()
+            same_values.append(same_error)
+            candidate_other = other & row_candidates
+            if bool(candidate_other.any().item()):
+                other_values.append(errors[row, candidate_other].min())
+            same_group_other = (target_groups == source_groups[row]) & other & row_candidates
+            hard_pool = target_present | same_group_other
+            if bool(same_group_other.any().item()) and bool(hard_pool.any().item()):
+                hard_nearest = errors[row].masked_fill(~hard_pool, float("inf")).argmin()
+                hard_hits.append((target_instances[hard_nearest] == source_instances[row]).to(dtype))
+                hard_same_values.append(same_error)
+                hard_other_values.append(errors[row, same_group_other].min())
+
+    zero = _zero(dtype, device)
+    accuracy = torch.stack(hits).mean() if hits else zero
+    target_present_fraction = torch.stack(target_present_values).mean() if target_present_values else zero
+    target_recall_fraction = torch.stack(target_recall_values).mean() if target_recall_values else zero
+    row_coverage_fraction = torch.stack(row_coverage_values).mean() if row_coverage_values else zero
+    candidate_mean_count = torch.stack(candidate_counts).mean() if candidate_counts else zero
+    same_error = torch.stack(same_values).mean() if same_values else zero
+    other_error = torch.stack(other_values).mean() if other_values else zero
+    if hard_hits:
+        hard_accuracy = torch.stack(hard_hits).mean()
+        hard_same_error = torch.stack(hard_same_values).mean()
+        hard_other_error = torch.stack(hard_other_values).mean()
+        hard_valid_fraction = torch.tensor(len(hard_hits) / max(1, errors.shape[0]), dtype=dtype, device=device)
+    else:
+        hard_accuracy = zero
+        hard_same_error = zero
+        hard_other_error = zero
+        hard_valid_fraction = zero
+
+    return {
+        "candidate_error_match_accuracy": accuracy,
+        "candidate_error_match_margin": other_error - same_error,
+        "candidate_error_same": same_error,
+        "candidate_error_nearest_other": other_error,
+        "candidate_error_hard_match_accuracy": hard_accuracy,
+        "candidate_error_hard_margin": hard_other_error - hard_same_error,
+        "candidate_error_hard_same": hard_same_error,
+        "candidate_error_nearest_same_group_other": hard_other_error,
+        "candidate_error_hard_valid_fraction": hard_valid_fraction,
+        "candidate_mean_count": candidate_mean_count,
+        "candidate_target_present_fraction": target_present_fraction,
+        "candidate_row_coverage_fraction": row_coverage_fraction,
+        "candidate_target_recall_fraction": target_recall_fraction,
+    }
+
+
 def ternary_axis_specialization(
     ternary: torch.Tensor,
     labels: torch.Tensor,
