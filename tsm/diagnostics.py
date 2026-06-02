@@ -172,6 +172,77 @@ def feature_label_diagnostics(features: torch.Tensor, labels: torch.Tensor) -> d
     }
 
 
+def position_recoverability_diagnostics(
+    features: torch.Tensor,
+    positions: torch.Tensor,
+    scale: float = 1.0,
+    valid: torch.Tensor | None = None,
+    ridge: float = 1e-3,
+) -> dict[str, torch.Tensor]:
+    dtype = features.dtype
+    device = features.device
+    zero = _zero(dtype, device)
+    if features.numel() == 0 or positions.numel() == 0:
+        return {
+            "position_linear_error": zero,
+            "position_linear_baseline_error": zero,
+            "position_linear_improvement": zero,
+            "position_linear_r2": zero,
+            "position_valid_fraction": zero,
+        }
+    count = min(features.shape[0], positions.shape[0])
+    if valid is None:
+        valid = torch.ones(count, dtype=torch.bool, device=device)
+    else:
+        valid = valid[:count].to(device=device, dtype=torch.bool)
+    valid_fraction = valid.to(dtype).mean() if valid.numel() else zero
+    if int(valid.to(torch.long).sum().item()) < 4:
+        return {
+            "position_linear_error": zero,
+            "position_linear_baseline_error": zero,
+            "position_linear_improvement": zero,
+            "position_linear_r2": zero,
+            "position_valid_fraction": valid_fraction,
+        }
+
+    x = features.detach()[:count][valid].to(device=device, dtype=torch.float32)
+    y = positions.detach()[:count][valid].to(device=device, dtype=torch.float32) / max(float(scale), 1.0)
+    row_ids = torch.arange(x.shape[0], device=device)
+    train_mask = row_ids.remainder(2) == 0
+    test_mask = ~train_mask
+    if int(train_mask.to(torch.long).sum().item()) < 2 or int(test_mask.to(torch.long).sum().item()) < 2:
+        return {
+            "position_linear_error": zero,
+            "position_linear_baseline_error": zero,
+            "position_linear_improvement": zero,
+            "position_linear_r2": zero,
+            "position_valid_fraction": valid_fraction,
+        }
+
+    train_x = torch.cat([x[train_mask], torch.ones((int(train_mask.sum().item()), 1), device=device)], dim=-1)
+    test_x = torch.cat([x[test_mask], torch.ones((int(test_mask.sum().item()), 1), device=device)], dim=-1)
+    train_y = y[train_mask]
+    test_y = y[test_mask]
+    xtx = torch.matmul(train_x.t(), train_x)
+    reg = torch.eye(xtx.shape[0], dtype=xtx.dtype, device=device) * float(ridge)
+    reg[-1, -1] = 0.0
+    weights = torch.linalg.solve(xtx + reg, torch.matmul(train_x.t(), train_y))
+    prediction = torch.matmul(test_x, weights)
+    baseline = train_y.mean(dim=0, keepdim=True).expand_as(test_y)
+    error = (prediction - test_y).norm(dim=-1).mean()
+    baseline_error = (baseline - test_y).norm(dim=-1).mean()
+    sse = (prediction - test_y).square().sum()
+    tss = (test_y - train_y.mean(dim=0, keepdim=True)).square().sum().clamp_min(1e-8)
+    r2 = 1.0 - sse / tss
+    return {
+        "position_linear_error": error.to(dtype),
+        "position_linear_baseline_error": baseline_error.to(dtype),
+        "position_linear_improvement": (baseline_error - error).to(dtype),
+        "position_linear_r2": r2.to(dtype),
+        "position_valid_fraction": valid_fraction,
+    }
+
+
 def feature_match_diagnostics(
     source_features: torch.Tensor,
     target_features: torch.Tensor,

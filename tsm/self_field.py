@@ -12,6 +12,7 @@ from .diagnostics import (
     feature_match_diagnostics,
     grouped_instance_match_diagnostics,
     paired_feature_match_diagnostics,
+    position_recoverability_diagnostics,
     ternary_label_diagnostics,
 )
 from .definitions import DefinitionBank
@@ -507,6 +508,32 @@ def _active_file_candidate_mask(
     return candidates
 
 
+def _active_file_feature_only_candidate_mask(
+    file_valid: torch.Tensor,
+    query_count: int,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> torch.Tensor:
+    count = min(int(query_count), file_valid.shape[0])
+    if count <= 0:
+        return torch.zeros((0, 0), dtype=torch.bool, device=device)
+    valid = file_valid[:count].to(device=device, dtype=torch.bool)
+    return valid.unsqueeze(0).expand(count, count)
+
+
+def _candidate_path_context_metrics(
+    diagnostics: dict[str, torch.Tensor],
+    reference: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    zero = _zero_like_scalar(reference)
+    return {
+        "occluded_bridge_delta": diagnostics.get("occluded_memory_definition_object_probe_delta", zero),
+        "ternary_nonzero_fraction": diagnostics.get("ternary_nonzero_fraction", zero),
+        "dynamics_position_error": diagnostics.get("reappeared_dynamics_position_error", zero),
+        "dynamics_valid_fraction": diagnostics.get("reappeared_dynamics_valid_fraction", zero),
+    }
+
+
 def _object_cycle_loss(
     hidden_scores: torch.Tensor,
     reappeared_scores: torch.Tensor,
@@ -947,17 +974,36 @@ class Self(nn.Module):
                     (self.cfg.active_file_query_weight > 0.0 or self.cfg.learned_active_file_gate_weight > 0.0)
                     and "object_position_tp1" in batch
                 ):
-                    active_candidates = _active_file_candidate_mask(
-                        memory_read.position[reappeared_for_alignment],
-                        batch["object_position_tp1"].to(device=image_t.device, dtype=image_t.dtype)[
-                            reappeared_for_alignment
-                        ],
-                        memory_read.position_valid[reappeared_for_alignment],
-                        memory_read.hit[reappeared_for_alignment],
-                        memory_read.age[reappeared_for_alignment],
-                        self.cfg.active_file_candidate_radius,
-                        self.cfg.active_file_candidate_max_age,
-                        _active_file_wrap_span(self.cfg),
+                    file_valid = (
+                        memory_read.position_valid[reappeared_for_alignment]
+                        & memory_read.hit[reappeared_for_alignment]
+                        & (
+                            memory_read.age[reappeared_for_alignment].view(-1)
+                            <= self.cfg.active_file_candidate_max_age
+                        )
+                    )
+                    feature_only_candidates = _active_file_feature_only_candidate_mask(
+                        file_valid,
+                        int(reappeared_for_alignment.to(torch.long).sum().item()),
+                        image_t.dtype,
+                        image_t.device,
+                    )
+                    predicted_position_candidates = None
+                    if dynamics_position is not None:
+                        predicted_position_candidates = _active_file_candidate_mask(
+                            memory_read.position[reappeared_for_alignment],
+                            dynamics_position.detach(),
+                            memory_read.position_valid[reappeared_for_alignment],
+                            memory_read.hit[reappeared_for_alignment],
+                            memory_read.age[reappeared_for_alignment],
+                            self.cfg.active_file_candidate_radius,
+                            self.cfg.active_file_candidate_max_age,
+                            _active_file_wrap_span(self.cfg),
+                        )
+                    active_candidates = (
+                        predicted_position_candidates
+                        if predicted_position_candidates is not None
+                        else feature_only_candidates
                     )
                     if self.cfg.active_file_query_weight > 0.0:
                         active_file_query = _candidate_masked_query_loss(
@@ -967,14 +1013,6 @@ class Self(nn.Module):
                             self.cfg.active_file_query_temperature,
                         )
                     if self.cfg.learned_active_file_gate_weight > 0.0:
-                        file_valid = (
-                            memory_read.position_valid[reappeared_for_alignment]
-                            & memory_read.hit[reappeared_for_alignment]
-                            & (
-                                memory_read.age[reappeared_for_alignment].view(-1)
-                                <= self.cfg.active_file_candidate_max_age
-                            )
-                        )
                         gate_query_scores = target_query_scores
                         gate_file_scores = target_file_scores
                         gate_query_context = target_context_probs
@@ -1569,19 +1607,80 @@ class Self(nn.Module):
                             diagnostics["reappeared_dynamics_position_error"] = dynamics_error
                             diagnostics["reappeared_dynamics_position_improvement"] = dynamics_improvement
                             diagnostics["reappeared_dynamics_valid_fraction"] = dynamics_valid.to(image_t.dtype).mean()
-                    active_candidates = None
+                    target_position_for_reappeared = None
                     if "object_position_tp1" in batch:
-                        active_candidates = _active_file_candidate_mask(
+                        target_position_for_reappeared = batch["object_position_tp1"].to(
+                            device=image_t.device,
+                            dtype=image_t.dtype,
+                        )[reappeared_active]
+                        diagnostics.update(_prefix_metrics(
+                            "reappeared_definition_",
+                            position_recoverability_diagnostics(
+                                target_definition_scores.to(image_t.dtype),
+                                target_position_for_reappeared,
+                                scale=float(max(1, self.cfg.image_size)),
+                            ),
+                        ))
+                        diagnostics.update(_prefix_metrics(
+                            "reappeared_file_query_",
+                            position_recoverability_diagnostics(
+                                target_query_scores.to(image_t.dtype),
+                                target_position_for_reappeared,
+                                scale=float(max(1, self.cfg.image_size)),
+                            ),
+                        ))
+                        diagnostics.update(_prefix_metrics(
+                            "reappeared_memory_definition_",
+                            position_recoverability_diagnostics(
+                                source_definition_scores.to(image_t.dtype),
+                                target_position_for_reappeared,
+                                scale=float(max(1, self.cfg.image_size)),
+                            ),
+                        ))
+                    oracle_position_candidates = None
+                    predicted_position_candidates = None
+                    feature_only_candidates = None
+                    active_candidates = None
+                    if target_position_for_reappeared is not None:
+                        file_valid = (
+                            memory_read.position_valid[reappeared_active]
+                            & memory_read.hit[reappeared_active]
+                            & (
+                                memory_read.age[reappeared_active].view(-1)
+                                <= self.cfg.active_file_candidate_max_age
+                            )
+                        )
+                        oracle_position_candidates = _active_file_candidate_mask(
                             memory_read.position[reappeared_active],
-                            batch["object_position_tp1"].to(device=image_t.device, dtype=image_t.dtype)[
-                                reappeared_active
-                            ],
+                            target_position_for_reappeared,
                             memory_read.position_valid[reappeared_active],
                             memory_read.hit[reappeared_active],
                             memory_read.age[reappeared_active],
                             self.cfg.active_file_candidate_radius,
                             self.cfg.active_file_candidate_max_age,
                             _active_file_wrap_span(self.cfg),
+                        )
+                        if dynamics_position is not None:
+                            predicted_position_candidates = _active_file_candidate_mask(
+                                memory_read.position[reappeared_active],
+                                dynamics_position.detach(),
+                                memory_read.position_valid[reappeared_active],
+                                memory_read.hit[reappeared_active],
+                                memory_read.age[reappeared_active],
+                                self.cfg.active_file_candidate_radius,
+                                self.cfg.active_file_candidate_max_age,
+                                _active_file_wrap_span(self.cfg),
+                            )
+                        feature_only_candidates = _active_file_feature_only_candidate_mask(
+                            file_valid,
+                            int(reappeared_active.to(torch.long).sum().item()),
+                            image_t.dtype,
+                            image_t.device,
+                        )
+                        active_candidates = (
+                            predicted_position_candidates
+                            if predicted_position_candidates is not None
+                            else feature_only_candidates
                         )
                     if "sequence_id" in batch:
                         sequence_id = batch["sequence_id"].to(device=image_t.device, dtype=torch.long)
@@ -1644,18 +1743,41 @@ class Self(nn.Module):
                                 ),
                             ))
                         if active_candidates is not None:
-                            diagnostics.update(_prefix_metrics(
-                                "reappeared_active_query_file_",
-                                candidate_instance_match_diagnostics(
-                                    target_query_scores.to(image_t.dtype),
-                                    target_object_file_scores.to(image_t.dtype),
-                                    source_sequences,
-                                    source_sequences,
-                                    source_labels,
-                                    source_labels,
-                                    active_candidates,
-                                ),
-                            ))
+                            candidate_paths = [
+                                ("reappeared_active_query_file_", active_candidates),
+                            ]
+                            if oracle_position_candidates is not None:
+                                candidate_paths.append((
+                                    "reappeared_oracle_position_query_file_",
+                                    oracle_position_candidates,
+                                ))
+                            if predicted_position_candidates is not None:
+                                candidate_paths.append((
+                                    "reappeared_predicted_position_query_file_",
+                                    predicted_position_candidates,
+                                ))
+                            if feature_only_candidates is not None:
+                                candidate_paths.append((
+                                    "reappeared_feature_only_query_file_",
+                                    feature_only_candidates,
+                                ))
+                            for prefix, candidates in candidate_paths:
+                                diagnostics.update(_prefix_metrics(
+                                    prefix,
+                                    candidate_instance_match_diagnostics(
+                                        target_query_scores.to(image_t.dtype),
+                                        target_object_file_scores.to(image_t.dtype),
+                                        source_sequences,
+                                        source_sequences,
+                                        source_labels,
+                                        source_labels,
+                                        candidates,
+                                    ),
+                                ))
+                                diagnostics.update(_prefix_metrics(
+                                    prefix,
+                                    _candidate_path_context_metrics(diagnostics, image_t),
+                                ))
                             with torch.no_grad():
                                 learned_logits = _active_file_gate_logits(
                                     self.active_file_gate,
@@ -1701,9 +1823,24 @@ class Self(nn.Module):
                                 ),
                             ))
                             diagnostics.update(_prefix_metrics(
-                                "reappeared_learned_active_file_gate_scaffold_",
+                                "reappeared_learned_active_file_gate_active_",
                                 _candidate_mask_agreement(learned_candidates, active_candidates),
                             ))
+                            if oracle_position_candidates is not None:
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_learned_active_file_gate_oracle_position_",
+                                    _candidate_mask_agreement(learned_candidates, oracle_position_candidates),
+                                ))
+                            if predicted_position_candidates is not None:
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_learned_active_file_gate_predicted_position_",
+                                    _candidate_mask_agreement(learned_candidates, predicted_position_candidates),
+                                ))
+                            if feature_only_candidates is not None:
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_learned_active_file_gate_feature_only_",
+                                    _candidate_mask_agreement(learned_candidates, feature_only_candidates),
+                                ))
                     diagnostics["reappeared_memory_definition_match_delta"] = (
                         diagnostics["reappeared_feature_match_accuracy"]
                         - diagnostics["reappeared_base_feature_match_accuracy"]
@@ -1818,11 +1955,6 @@ class Self(nn.Module):
                         "reappeared_learned_active_query_file_candidate_target_present_fraction": _zero_like_scalar(image_t),
                         "reappeared_learned_active_query_file_candidate_row_coverage_fraction": _zero_like_scalar(image_t),
                         "reappeared_learned_active_query_file_candidate_target_recall_fraction": _zero_like_scalar(image_t),
-                        "reappeared_learned_active_file_gate_scaffold_precision": _zero_like_scalar(image_t),
-                        "reappeared_learned_active_file_gate_scaffold_recall": _zero_like_scalar(image_t),
-                        "reappeared_learned_active_file_gate_scaffold_f1": _zero_like_scalar(image_t),
-                        "reappeared_learned_active_file_gate_scaffold_predicted_fraction": _zero_like_scalar(image_t),
-                        "reappeared_learned_active_file_gate_scaffold_target_fraction": _zero_like_scalar(image_t),
                         "reappeared_base_feature_match_accuracy": _zero_like_scalar(image_t),
                         "reappeared_base_feature_match_margin": _zero_like_scalar(image_t),
                         "reappeared_base_feature_same_distance": _zero_like_scalar(image_t),

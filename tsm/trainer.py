@@ -316,6 +316,13 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                         handle.write(f"- final_reappeared_dynamics_position_error: {last_metrics['reappeared_dynamics_position_error']:.6f}\n")
                         handle.write(f"- final_reappeared_dynamics_position_improvement: {last_metrics['reappeared_dynamics_position_improvement']:.6f}\n")
                         handle.write(f"- final_reappeared_dynamics_valid_fraction: {last_metrics['reappeared_dynamics_valid_fraction']:.3f}\n")
+                    if "reappeared_definition_position_linear_error" in last_metrics:
+                        handle.write(f"- final_reappeared_definition_position_linear_error: {last_metrics['reappeared_definition_position_linear_error']:.6f}\n")
+                        handle.write(f"- final_reappeared_definition_position_linear_improvement: {last_metrics['reappeared_definition_position_linear_improvement']:.6f}\n")
+                        handle.write(f"- final_reappeared_file_query_position_linear_error: {last_metrics['reappeared_file_query_position_linear_error']:.6f}\n")
+                        handle.write(f"- final_reappeared_file_query_position_linear_improvement: {last_metrics['reappeared_file_query_position_linear_improvement']:.6f}\n")
+                        handle.write(f"- final_reappeared_memory_definition_position_linear_error: {last_metrics['reappeared_memory_definition_position_linear_error']:.6f}\n")
+                        handle.write(f"- final_reappeared_memory_definition_position_linear_improvement: {last_metrics['reappeared_memory_definition_position_linear_improvement']:.6f}\n")
                     if "active_file_expectation_pair" in last_metrics:
                         handle.write(f"- final_active_file_expectation_pair_loss: {last_metrics['active_file_expectation_pair']:.6f}\n")
                         handle.write(f"- final_active_file_expectation_hard_loss: {last_metrics['active_file_expectation_hard']:.6f}\n")
@@ -327,13 +334,26 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                     handle.write(f"- final_reappeared_active_query_file_candidate_mean_count: {last_metrics['reappeared_active_query_file_candidate_mean_count']:.3f}\n")
                     handle.write(f"- final_reappeared_active_query_file_row_coverage: {last_metrics['reappeared_active_query_file_candidate_row_coverage_fraction']:.3f}\n")
                     handle.write(f"- final_reappeared_active_query_file_target_recall: {last_metrics['reappeared_active_query_file_candidate_target_recall_fraction']:.3f}\n")
+                if "reappeared_oracle_position_query_file_candidate_instance_match_accuracy" in last_metrics:
+                    handle.write(f"- final_reappeared_oracle_position_query_file_match_accuracy: {last_metrics['reappeared_oracle_position_query_file_candidate_instance_match_accuracy']:.3f}\n")
+                    handle.write(f"- final_reappeared_oracle_position_query_file_hard_match_accuracy: {last_metrics['reappeared_oracle_position_query_file_candidate_instance_hard_match_accuracy']:.3f}\n")
+                    handle.write(f"- final_reappeared_oracle_position_query_file_target_recall: {last_metrics['reappeared_oracle_position_query_file_candidate_target_recall_fraction']:.3f}\n")
+                if "reappeared_predicted_position_query_file_candidate_instance_match_accuracy" in last_metrics:
+                    handle.write(f"- final_reappeared_predicted_position_query_file_match_accuracy: {last_metrics['reappeared_predicted_position_query_file_candidate_instance_match_accuracy']:.3f}\n")
+                    handle.write(f"- final_reappeared_predicted_position_query_file_hard_match_accuracy: {last_metrics['reappeared_predicted_position_query_file_candidate_instance_hard_match_accuracy']:.3f}\n")
+                    handle.write(f"- final_reappeared_predicted_position_query_file_target_recall: {last_metrics['reappeared_predicted_position_query_file_candidate_target_recall_fraction']:.3f}\n")
+                if "reappeared_feature_only_query_file_candidate_instance_match_accuracy" in last_metrics:
+                    handle.write(f"- final_reappeared_feature_only_query_file_match_accuracy: {last_metrics['reappeared_feature_only_query_file_candidate_instance_match_accuracy']:.3f}\n")
+                    handle.write(f"- final_reappeared_feature_only_query_file_hard_match_accuracy: {last_metrics['reappeared_feature_only_query_file_candidate_instance_hard_match_accuracy']:.3f}\n")
+                    handle.write(f"- final_reappeared_feature_only_query_file_target_recall: {last_metrics['reappeared_feature_only_query_file_candidate_target_recall_fraction']:.3f}\n")
                 if "reappeared_learned_active_query_file_candidate_instance_match_accuracy" in last_metrics:
                     handle.write(f"- final_reappeared_learned_active_query_file_match_accuracy: {last_metrics['reappeared_learned_active_query_file_candidate_instance_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_learned_active_query_file_hard_match_accuracy: {last_metrics['reappeared_learned_active_query_file_candidate_instance_hard_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_learned_active_query_file_candidate_mean_count: {last_metrics['reappeared_learned_active_query_file_candidate_mean_count']:.3f}\n")
                     handle.write(f"- final_reappeared_learned_active_query_file_row_coverage: {last_metrics['reappeared_learned_active_query_file_candidate_row_coverage_fraction']:.3f}\n")
                     handle.write(f"- final_reappeared_learned_active_query_file_target_recall: {last_metrics['reappeared_learned_active_query_file_candidate_target_recall_fraction']:.3f}\n")
-                    handle.write(f"- final_reappeared_learned_active_gate_scaffold_recall: {last_metrics['reappeared_learned_active_file_gate_scaffold_recall']:.3f}\n")
+                    if "reappeared_learned_active_file_gate_active_recall" in last_metrics:
+                        handle.write(f"- final_reappeared_learned_active_gate_active_recall: {last_metrics['reappeared_learned_active_file_gate_active_recall']:.3f}\n")
             if "occluded_memory_object_feature_probe_accuracy" in last_metrics:
                 handle.write(f"- final_occluded_memory_object_probe_accuracy: {last_metrics['occluded_memory_object_feature_probe_accuracy']:.3f}\n")
                 handle.write(f"- final_occluded_memory_object_centroid_separation: {last_metrics['occluded_memory_object_feature_centroid_separation']:.3f}\n")
@@ -542,7 +562,7 @@ def run_seed_sweep(
                 f"{_metric(heldout, 'reappeared_active_query_file_candidate_mean_count'):.3f} | "
                 f"{_metric(heldout, 'reappeared_learned_active_query_file_candidate_instance_match_accuracy'):.3f} | "
                 f"{_metric(heldout, 'reappeared_learned_active_query_file_candidate_mean_count'):.3f} | "
-                f"{_metric(heldout, 'reappeared_learned_active_file_gate_scaffold_recall'):.3f} | "
+                f"{_metric(heldout, 'reappeared_learned_active_file_gate_active_recall'):.3f} | "
                 f"{_metric(heldout, 'memory_definition_prediction_occluded_impact_mean'):.6f} | "
                 f"{_metric(axis, 'ternary_mode_mutual_information'):.3f} | "
                 f"{_metric(heldout, 'ternary_nonzero_fraction'):.3f} | "

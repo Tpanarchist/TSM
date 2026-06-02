@@ -9,6 +9,7 @@ from tsm.self_field import (
     _active_file_dynamics_input_dim,
     _active_file_dynamics_position,
     _active_file_expectation,
+    _active_file_feature_only_candidate_mask,
     _active_file_gate_input_dim,
     _active_file_gate_logits,
 )
@@ -123,6 +124,21 @@ def test_active_file_candidate_mask_supports_wrapped_positions():
 
     assert not bool(direct[0, 0].item())
     assert bool(wrapped[0, 0].item())
+
+
+def test_active_file_feature_only_candidate_mask_uses_valid_files():
+    valid = torch.tensor([True, False, True])
+
+    mask = _active_file_feature_only_candidate_mask(valid, 3, torch.float32, torch.device("cpu"))
+
+    expected = torch.tensor(
+        [
+            [True, False, True],
+            [True, False, True],
+            [True, False, True],
+        ]
+    )
+    assert torch.equal(mask, expected)
 
 
 def test_active_file_gate_accepts_context_features():
@@ -329,17 +345,35 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_dynamics_position_error",
         "reappeared_dynamics_position_improvement",
         "reappeared_dynamics_valid_fraction",
+        "reappeared_definition_position_linear_error",
+        "reappeared_definition_position_linear_improvement",
+        "reappeared_file_query_position_linear_error",
+        "reappeared_file_query_position_linear_improvement",
+        "reappeared_memory_definition_position_linear_error",
+        "reappeared_memory_definition_position_linear_improvement",
         "reappeared_active_query_file_candidate_instance_match_accuracy",
         "reappeared_active_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_active_query_file_candidate_mean_count",
         "reappeared_active_query_file_candidate_row_coverage_fraction",
         "reappeared_active_query_file_candidate_target_recall_fraction",
+        "reappeared_oracle_position_query_file_candidate_instance_match_accuracy",
+        "reappeared_oracle_position_query_file_candidate_instance_hard_match_accuracy",
+        "reappeared_oracle_position_query_file_candidate_row_coverage_fraction",
+        "reappeared_oracle_position_query_file_candidate_target_recall_fraction",
+        "reappeared_predicted_position_query_file_candidate_instance_match_accuracy",
+        "reappeared_predicted_position_query_file_candidate_instance_hard_match_accuracy",
+        "reappeared_predicted_position_query_file_candidate_row_coverage_fraction",
+        "reappeared_predicted_position_query_file_candidate_target_recall_fraction",
+        "reappeared_feature_only_query_file_candidate_instance_match_accuracy",
+        "reappeared_feature_only_query_file_candidate_instance_hard_match_accuracy",
+        "reappeared_feature_only_query_file_candidate_row_coverage_fraction",
+        "reappeared_feature_only_query_file_candidate_target_recall_fraction",
         "reappeared_learned_active_query_file_candidate_instance_match_accuracy",
         "reappeared_learned_active_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_learned_active_query_file_candidate_mean_count",
         "reappeared_learned_active_query_file_candidate_row_coverage_fraction",
         "reappeared_learned_active_query_file_candidate_target_recall_fraction",
-        "reappeared_learned_active_file_gate_scaffold_recall",
+        "reappeared_learned_active_file_gate_active_recall",
     }
     assert torch.allclose(out.diagnostics["temporal_visible_fraction"], torch.tensor(0.6), atol=1e-6)
     assert torch.allclose(out.diagnostics["temporal_occluded_fraction"], torch.tensor(0.4), atol=1e-6)

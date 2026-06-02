@@ -6,6 +6,7 @@ from tsm.diagnostics import (
     feature_match_diagnostics,
     grouped_instance_match_diagnostics,
     paired_feature_match_diagnostics,
+    position_recoverability_diagnostics,
     ternary_axis_specialization,
     ternary_label_diagnostics,
 )
@@ -216,3 +217,23 @@ def test_candidate_instance_match_diagnostics_reports_empty_rows():
     assert metrics["candidate_row_coverage_fraction"].item() == 0.5
     assert metrics["candidate_target_recall_fraction"].item() == 0.5
     assert metrics["candidate_mean_count"].item() == 1.0
+
+
+def test_position_recoverability_diagnostics_detects_linear_position():
+    positions = torch.tensor(
+        [
+            [0.0, 0.0],
+            [1.0, 2.0],
+            [2.0, 4.0],
+            [3.0, 6.0],
+            [4.0, 8.0],
+            [5.0, 10.0],
+        ]
+    )
+    features = torch.cat([positions / 10.0, torch.ones(6, 1)], dim=-1)
+
+    metrics = position_recoverability_diagnostics(features, positions, scale=10.0)
+
+    assert metrics["position_linear_error"].item() < metrics["position_linear_baseline_error"].item()
+    assert metrics["position_linear_improvement"].item() > 0.0
+    assert metrics["position_valid_fraction"].item() == 1.0
