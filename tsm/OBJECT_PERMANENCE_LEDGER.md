@@ -900,3 +900,100 @@ TSM has validated curved local contested binding for two and three same-class ob
 Next target:
 
 Clean the slot-to-file trajectory pipeline under four-object load. Do not add broader cognition, governance, or appearance/context routing until the dynamics state can keep four clean object trajectories separated.
+
+## Probe A: Neutral Decline-To-Bind
+
+Diagnostic added:
+
+- `reappeared_dynamics_neutral_all_file_slot_*`
+- `reappeared_ballistic_neutral_all_file_slot_*`
+
+This is not a new binding mechanism and it is not Definition splitting. Forced-choice file-to-slot metrics remain unchanged. Probe A asks whether a file's nearest slot is genuinely separable from its second-nearest slot under the current endpoint error band.
+
+Rule:
+
+```text
+margin = second_nearest_slot_distance - nearest_slot_distance
+uncertainty_proxy = measured endpoint error
+
+if margin <= uncertainty_proxy:
+    decline / neutral
+else:
+    confident bind
+```
+
+The uncertainty proxy is measured endpoint error, so this is an evaluation probe, not a deployable runtime confidence head. It tests whether the failures are inside an honest deadband.
+
+Buckets:
+
+- confident correct bind
+- confident wrong bind
+- correct decline: neutral prevented a forced wrong bind
+- wrong decline: neutral withheld a forced correct bind
+
+Audits:
+
+- assignment object-file-id usage: `0.000`
+- assignment object-id usage: `0.000`
+- old forced-choice metrics remain side by side
+
+Held-out/test summary:
+
+| condition | forced correct | forced wrong | neutral decline | confident correct | confident wrong | correct decline | wrong decline | decline precision | learned all-set |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2-object curved | 1.000 | 0.000 | 0.374 | 0.626 | 0.000 | 0.000 | 0.374 | 0.000 | 1.000 |
+| 3-object curved | 0.833 | 0.167 | 0.333 | 0.667 | 0.000 | 0.167 | 0.167 | 0.500 | 1.000 |
+| 4-object curved | 0.500 | 0.500 | 0.625 | 0.375 | 0.000 | 0.500 | 0.125 | 0.792 | 0.250 |
+| 4-object wide | 0.396 | 0.604 | 0.813 | 0.188 | 0.000 | 0.604 | 0.208 | 0.749 | 0.167 |
+
+Interpretation:
+
+The four-object failures are mostly inside a real neutral band. In the 4-object curved condition, all forced wrong decisions are converted into correct declines under the endpoint-error deadband, with no confident-wrong bucket. The wide 4-object condition shows the same pattern: forced wrong binding is high, but those wrong binds mostly become correct declines when the system is allowed to say "not enough resolution."
+
+This supports the narrow TSM claim:
+
+```text
+Neutral is not null.
+Neutral can act as an appraisal state meaning:
+current measurement cannot resolve this distinction.
+```
+
+Caveat:
+
+The probe is conservative. It also declines some forced-correct decisions:
+
+- 2-object curved wrong-decline: `0.374`
+- 3-object curved wrong-decline: `0.167`
+- 4-object curved wrong-decline: `0.125`
+- 4-object wide wrong-decline: `0.208`
+
+So the neutral band is real, but its current threshold is not calibrated. It is useful as an appraisal diagnostic before it is useful as a runtime binding policy.
+
+## Shared-Trajectory Load Diagnostic
+
+Endpoint metrics now also report:
+
+- shared first-two-track endpoint mean / p90.
+- extra-track endpoint mean / p90.
+- per-track endpoint means for tracks 0-3.
+
+Tracks 0 and 1 follow the same curved trajectory family across the 2-, 3-, and 4-object generators. This checks whether the same trajectory gets worse as simultaneous object count rises.
+
+Held-out/test summary:
+
+| condition | shared mean | shared p90 | extra mean | extra p90 | track0 mean | track1 mean | track2 mean | track3 mean |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2-object curved | 0.163 | 0.291 | 0.000 | 0.000 | 0.188 | 0.138 | 0.000 | 0.000 |
+| 3-object curved | 0.125 | 0.234 | 0.146 | 0.231 | 0.116 | 0.134 | 0.146 | 0.000 |
+| 4-object curved | 0.179 | 0.354 | 0.235 | 0.410 | 0.186 | 0.172 | 0.225 | 0.246 |
+| 4-object wide | 0.293 | 0.462 | 0.232 | 0.406 | 0.265 | 0.321 | 0.227 | 0.238 |
+
+Interpretation:
+
+The same shared trajectories do get worse under four-object load. The 3-object case does not degrade the shared tracks, but the 4-object case does, and the wide 4-object run still degrades despite clean slots and wider spacing. That supports the load-induced trajectory degradation diagnosis over a pure spacing or slot-contamination diagnosis.
+
+Current fork:
+
+- Probe A passes as an appraisal diagnostic: four-object wrong binds mostly become correct declines.
+- The next runtime step should be calibrated uncertainty / neutral binding, not immediate hard Definition splitting.
+- Definition splitting or new distinction creation becomes appropriate after the model can expose an internal uncertainty estimate rather than using measured endpoint error as the probe's oracle-side proxy.

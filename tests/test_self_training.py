@@ -16,6 +16,7 @@ from tsm.self_field import (
     _all_track_endpoint_slot_cleanliness_metrics,
     _all_track_endpoint_spacing_metrics,
     _all_track_file_slot_assignment_metrics,
+    _all_track_neutral_file_slot_metrics,
     _all_track_predicted_file_slot_metrics,
     _file_slot_assignment_metrics,
     _local_reappearance_images,
@@ -474,6 +475,32 @@ def test_all_track_predicted_file_slot_metrics_gathers_scene_files():
     assert metrics["candidate_mean_count"].item() == 3.0
 
 
+def test_all_track_neutral_file_slot_metrics_buckets_deadband_decisions():
+    cfg = TsmConfig(image_size=16, object_slot_count=3)
+    metrics = _all_track_neutral_file_slot_metrics(
+        predicted_positions=torch.tensor([[0.1, 0.0], [5.9, 0.0], [5.9, 0.0]]),
+        predicted_valid=torch.tensor([True, True, True]),
+        file_instance_labels=torch.tensor([10, 11, 12], dtype=torch.long),
+        slot_positions=torch.tensor([[[0.0, 0.0], [4.0, 0.0], [8.0, 0.0]]]),
+        slot_valid=torch.tensor([[True, True, True]]),
+        all_positions=torch.tensor([[[0.0, 0.0], [4.0, 0.0], [8.0, 0.0]]]),
+        all_instance_labels=torch.tensor([[10, 11, 12]], dtype=torch.long),
+        cfg=cfg,
+    )
+
+    assert metrics["object_count"].item() == 3.0
+    assert metrics["decision_coverage_fraction"].item() == 1.0
+    assert torch.isclose(metrics["forced_correct_fraction"], torch.tensor(2.0 / 3.0))
+    assert torch.isclose(metrics["forced_wrong_fraction"], torch.tensor(1.0 / 3.0))
+    assert torch.isclose(metrics["neutral_decline_fraction"], torch.tensor(2.0 / 3.0))
+    assert torch.isclose(metrics["confident_correct_bind_fraction"], torch.tensor(1.0 / 3.0))
+    assert metrics["confident_wrong_bind_fraction"].item() == 0.0
+    assert torch.isclose(metrics["correct_decline_fraction"], torch.tensor(1.0 / 3.0))
+    assert torch.isclose(metrics["wrong_decline_fraction"], torch.tensor(1.0 / 3.0))
+    assert torch.isclose(metrics["decline_precision"], torch.tensor(0.5))
+    assert metrics["assignment_object_file_id_usage"].item() == 0.0
+
+
 def test_all_track_endpoint_spacing_metrics_reports_error_budget():
     cfg = TsmConfig(image_size=16, object_slot_count=3)
     metrics = _all_track_endpoint_spacing_metrics(
@@ -490,6 +517,9 @@ def test_all_track_endpoint_spacing_metrics_reports_error_budget():
     assert metrics["min_interobject_spacing_px"].item() == 6.0
     assert metrics["endpoint_error_mean"].item() == 0.0
     assert metrics["endpoint_error_to_spacing_ratio"].item() == 0.0
+    assert metrics["shared_track_endpoint_error_mean"].item() == 0.0
+    assert metrics["extra_track_endpoint_error_mean"].item() == 0.0
+    assert metrics["track0_endpoint_error_mean"].item() == 0.0
 
 
 def test_all_track_endpoint_slot_cleanliness_metrics_splits_endpoint_errors():
@@ -785,10 +815,18 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_dynamics_all_endpoint_endpoint_error_median",
         "reappeared_dynamics_all_endpoint_endpoint_error_p90",
         "reappeared_dynamics_all_endpoint_endpoint_error_to_spacing_ratio",
+        "reappeared_dynamics_all_endpoint_shared_track_endpoint_error_mean",
+        "reappeared_dynamics_all_endpoint_extra_track_endpoint_error_mean",
         "reappeared_dynamics_slot_clean_endpoint_slot_clean_object_fraction",
         "reappeared_dynamics_slot_clean_endpoint_clean_endpoint_error_p90",
         "reappeared_dynamics_slot_clean_endpoint_dirty_endpoint_error_p90",
         "reappeared_dynamics_slot_clean_endpoint_high_error_clean_fraction",
+        "reappeared_dynamics_neutral_all_file_slot_forced_correct_fraction",
+        "reappeared_dynamics_neutral_all_file_slot_neutral_decline_fraction",
+        "reappeared_dynamics_neutral_all_file_slot_confident_correct_bind_fraction",
+        "reappeared_dynamics_neutral_all_file_slot_confident_wrong_bind_fraction",
+        "reappeared_dynamics_neutral_all_file_slot_correct_decline_fraction",
+        "reappeared_dynamics_neutral_all_file_slot_wrong_decline_fraction",
         "reappeared_ballistic_endpoint_pair_distance_ratio",
         "reappeared_ballistic_endpoint_error_p95",
         "reappeared_ballistic_local_file_slot_target_match_accuracy",
@@ -798,8 +836,10 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_ballistic_all_endpoint_endpoint_error_mean",
         "reappeared_ballistic_all_endpoint_endpoint_error_p90",
         "reappeared_ballistic_all_endpoint_endpoint_error_to_spacing_ratio",
+        "reappeared_ballistic_all_endpoint_shared_track_endpoint_error_mean",
         "reappeared_ballistic_slot_clean_endpoint_slot_clean_object_fraction",
         "reappeared_ballistic_slot_clean_endpoint_clean_endpoint_error_p90",
+        "reappeared_ballistic_neutral_all_file_slot_neutral_decline_fraction",
         "reappeared_oracle_all_file_slot_object_match_accuracy",
         "reappeared_oracle_all_file_slot_set_match_accuracy",
         "reappeared_oracle_error_shape_file_slot_center_bias_target_match_accuracy",

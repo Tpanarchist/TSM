@@ -350,6 +350,10 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                             handle.write(f"- final_{summary_name}_endpoint_error_p90: {last_metrics[f'{metric_prefix}endpoint_error_p90']:.6f}\n")
                             handle.write(f"- final_{summary_name}_endpoint_error_to_spacing_ratio: {last_metrics[f'{metric_prefix}endpoint_error_to_spacing_ratio']:.3f}\n")
                             handle.write(f"- final_{summary_name}_endpoint_p90_to_spacing_ratio: {last_metrics[f'{metric_prefix}endpoint_p90_to_spacing_ratio']:.3f}\n")
+                            handle.write(f"- final_{summary_name}_shared_track_endpoint_error_mean: {last_metrics[f'{metric_prefix}shared_track_endpoint_error_mean']:.6f}\n")
+                            handle.write(f"- final_{summary_name}_shared_track_endpoint_error_p90: {last_metrics[f'{metric_prefix}shared_track_endpoint_error_p90']:.6f}\n")
+                            handle.write(f"- final_{summary_name}_extra_track_endpoint_error_mean: {last_metrics[f'{metric_prefix}extra_track_endpoint_error_mean']:.6f}\n")
+                            handle.write(f"- final_{summary_name}_extra_track_endpoint_error_p90: {last_metrics[f'{metric_prefix}extra_track_endpoint_error_p90']:.6f}\n")
                     for summary_name, metric_prefix in (
                         ("reappeared_dynamics_slot_clean_endpoint", "reappeared_dynamics_slot_clean_endpoint_"),
                         ("reappeared_ballistic_slot_clean_endpoint", "reappeared_ballistic_slot_clean_endpoint_"),
@@ -439,6 +443,23 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                                     key = f"{metric_prefix}{metric_name}"
                                     if key in last_metrics:
                                         handle.write(f"- final_{summary_name}_{metric_name}: {last_metrics[key]:.3f}\n")
+                        for summary_name, metric_prefix in (
+                            ("reappeared_dynamics_neutral_all_file_slot", "reappeared_dynamics_neutral_all_file_slot_"),
+                            ("reappeared_ballistic_neutral_all_file_slot", "reappeared_ballistic_neutral_all_file_slot_"),
+                        ):
+                            if f"{metric_prefix}neutral_decline_fraction" in last_metrics:
+                                handle.write(f"- final_{summary_name}_decision_coverage_fraction: {last_metrics[f'{metric_prefix}decision_coverage_fraction']:.3f}\n")
+                                handle.write(f"- final_{summary_name}_forced_correct_fraction: {last_metrics[f'{metric_prefix}forced_correct_fraction']:.3f}\n")
+                                handle.write(f"- final_{summary_name}_forced_wrong_fraction: {last_metrics[f'{metric_prefix}forced_wrong_fraction']:.3f}\n")
+                                handle.write(f"- final_{summary_name}_neutral_decline_fraction: {last_metrics[f'{metric_prefix}neutral_decline_fraction']:.3f}\n")
+                                handle.write(f"- final_{summary_name}_confident_correct_bind_fraction: {last_metrics[f'{metric_prefix}confident_correct_bind_fraction']:.3f}\n")
+                                handle.write(f"- final_{summary_name}_confident_wrong_bind_fraction: {last_metrics[f'{metric_prefix}confident_wrong_bind_fraction']:.3f}\n")
+                                handle.write(f"- final_{summary_name}_correct_decline_fraction: {last_metrics[f'{metric_prefix}correct_decline_fraction']:.3f}\n")
+                                handle.write(f"- final_{summary_name}_wrong_decline_fraction: {last_metrics[f'{metric_prefix}wrong_decline_fraction']:.3f}\n")
+                                handle.write(f"- final_{summary_name}_decline_precision: {last_metrics[f'{metric_prefix}decline_precision']:.3f}\n")
+                                handle.write(f"- final_{summary_name}_confident_accuracy: {last_metrics[f'{metric_prefix}confident_accuracy']:.3f}\n")
+                                handle.write(f"- final_{summary_name}_assignment_object_file_id_usage: {last_metrics[f'{metric_prefix}assignment_object_file_id_usage']:.1f}\n")
+                                handle.write(f"- final_{summary_name}_assignment_object_id_usage: {last_metrics[f'{metric_prefix}assignment_object_id_usage']:.1f}\n")
                         for noise_px in (0, 1, 2, 3, 4, 6, 7, 8):
                             noise_prefix = f"reappeared_oracle_noise_file_slot_noise_{noise_px}px_"
                             target_key = f"{noise_prefix}target_match_accuracy"

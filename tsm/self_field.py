@@ -1242,6 +1242,176 @@ def _all_track_predicted_file_slot_metrics(
     )
 
 
+def _all_track_neutral_file_slot_metrics(
+    predicted_positions: torch.Tensor,
+    predicted_valid: torch.Tensor,
+    file_instance_labels: torch.Tensor,
+    slot_positions: torch.Tensor,
+    slot_valid: torch.Tensor,
+    all_positions: torch.Tensor,
+    all_instance_labels: torch.Tensor,
+    cfg: TsmConfig,
+) -> dict[str, torch.Tensor]:
+    dtype = predicted_positions.dtype if predicted_positions.is_floating_point() else torch.float32
+    device = predicted_positions.device
+    zero = torch.zeros((), dtype=dtype, device=device)
+    empty = {
+        "object_count": zero,
+        "decision_coverage_fraction": zero,
+        "forced_correct_fraction": zero,
+        "forced_wrong_fraction": zero,
+        "neutral_decline_fraction": zero,
+        "confident_fraction": zero,
+        "confident_correct_bind_fraction": zero,
+        "confident_wrong_bind_fraction": zero,
+        "correct_decline_fraction": zero,
+        "wrong_decline_fraction": zero,
+        "decline_precision": zero,
+        "confident_accuracy": zero,
+        "decision_margin_mean": zero,
+        "decision_margin_p10": zero,
+        "endpoint_uncertainty_mean": zero,
+        "margin_to_uncertainty_mean": zero,
+        "assignment_object_file_id_usage": zero,
+        "assignment_object_id_usage": zero,
+        "assignment_sequence_id_usage": zero,
+    }
+    if (
+        predicted_positions.numel() == 0
+        or predicted_valid.numel() == 0
+        or file_instance_labels.numel() == 0
+        or slot_positions.numel() == 0
+        or slot_valid.numel() == 0
+        or all_positions.numel() == 0
+        or all_instance_labels.numel() == 0
+    ):
+        return empty
+
+    file_count = min(predicted_positions.shape[0], predicted_valid.shape[0], file_instance_labels.shape[0])
+    query_count = min(slot_positions.shape[0], slot_valid.shape[0], all_positions.shape[0], all_instance_labels.shape[0])
+    object_count = all_instance_labels.shape[1] if all_instance_labels.dim() >= 2 else 0
+    if file_count == 0 or query_count == 0 or object_count <= 0:
+        out = dict(empty)
+        out["object_count"] = torch.tensor(float(object_count), dtype=dtype, device=device)
+        return out
+
+    predicted_positions = predicted_positions[:file_count].to(device=device, dtype=dtype)
+    predicted_valid = predicted_valid[:file_count].to(device=device, dtype=torch.bool)
+    file_instance_labels = file_instance_labels[:file_count].to(device=device, dtype=torch.long)
+    slot_positions = slot_positions[:query_count].to(device=device, dtype=dtype)
+    slot_valid = slot_valid[:query_count].to(device=device, dtype=torch.bool)
+    all_positions = all_positions[:query_count].to(device=device, dtype=dtype)
+    all_instance_labels = all_instance_labels[:query_count].to(device=device, dtype=torch.long)
+
+    scale = float(max(1, cfg.image_size))
+    forced_correct: list[torch.Tensor] = []
+    forced_wrong: list[torch.Tensor] = []
+    declines: list[torch.Tensor] = []
+    confident: list[torch.Tensor] = []
+    confident_correct: list[torch.Tensor] = []
+    confident_wrong: list[torch.Tensor] = []
+    correct_declines: list[torch.Tensor] = []
+    wrong_declines: list[torch.Tensor] = []
+    margins: list[torch.Tensor] = []
+    uncertainties: list[torch.Tensor] = []
+
+    for row in range(query_count):
+        valid_slots = torch.nonzero(slot_valid[row], as_tuple=False).flatten()
+        if valid_slots.numel() < max(2, object_count):
+            continue
+        true_positions = all_positions[row, :object_count]
+        true_distances = torch.cdist(true_positions, slot_positions[row, valid_slots]) / scale
+
+        best_true_error = torch.tensor(float("inf"), dtype=dtype, device=device)
+        true_object_to_slot: dict[int, int] = {}
+        for slot_order in permutations(range(int(valid_slots.numel())), object_count):
+            total = zero
+            for object_idx, slot_local in enumerate(slot_order):
+                total = total + true_distances[object_idx, slot_local]
+            if bool((total < best_true_error).item()):
+                best_true_error = total
+                true_object_to_slot = {
+                    object_idx: int(valid_slots[slot_local].item())
+                    for object_idx, slot_local in enumerate(slot_order)
+                }
+        if not true_object_to_slot:
+            continue
+
+        for object_idx in range(object_count):
+            label = all_instance_labels[row, object_idx]
+            matches = torch.nonzero(file_instance_labels == label, as_tuple=False).flatten()
+            if matches.numel() == 0:
+                continue
+            file_idx = matches[0]
+            if not bool(predicted_valid[file_idx].item()):
+                continue
+            file_distances = torch.cdist(
+                predicted_positions[file_idx].view(1, 2),
+                slot_positions[row, valid_slots],
+            ).flatten() / scale
+            if file_distances.numel() < 2:
+                continue
+            sorted_distances, sorted_local = file_distances.sort()
+            nearest_slot = int(valid_slots[sorted_local[0]].item())
+            true_slot = true_object_to_slot.get(object_idx)
+            if true_slot is None:
+                continue
+            margin = sorted_distances[1] - sorted_distances[0]
+            uncertainty = (predicted_positions[file_idx] - true_positions[object_idx]).norm() / scale
+            should_decline = margin <= uncertainty
+            is_correct = nearest_slot == true_slot
+
+            margin = margin.clamp_min(0.0)
+            margins.append(margin)
+            uncertainties.append(uncertainty)
+            forced_correct.append(torch.tensor(float(is_correct), dtype=dtype, device=device))
+            forced_wrong.append(torch.tensor(float(not is_correct), dtype=dtype, device=device))
+            declines.append(should_decline.to(dtype))
+            confident.append((~should_decline).to(dtype))
+            confident_correct.append(torch.tensor(float((not bool(should_decline.item())) and is_correct), dtype=dtype, device=device))
+            confident_wrong.append(torch.tensor(float((not bool(should_decline.item())) and (not is_correct)), dtype=dtype, device=device))
+            correct_declines.append(torch.tensor(float(bool(should_decline.item()) and (not is_correct)), dtype=dtype, device=device))
+            wrong_declines.append(torch.tensor(float(bool(should_decline.item()) and is_correct), dtype=dtype, device=device))
+
+    if not margins:
+        out = dict(empty)
+        out["object_count"] = torch.tensor(float(object_count), dtype=dtype, device=device)
+        return out
+
+    margin_tensor = torch.stack(margins)
+    uncertainty_tensor = torch.stack(uncertainties)
+    forced_correct_tensor = torch.stack(forced_correct)
+    forced_wrong_tensor = torch.stack(forced_wrong)
+    decline_tensor = torch.stack(declines)
+    confident_tensor = torch.stack(confident)
+    confident_correct_tensor = torch.stack(confident_correct)
+    confident_wrong_tensor = torch.stack(confident_wrong)
+    correct_decline_tensor = torch.stack(correct_declines)
+    wrong_decline_tensor = torch.stack(wrong_declines)
+    expected_decisions = float(max(1, query_count * object_count))
+    return {
+        "object_count": torch.tensor(float(object_count), dtype=dtype, device=device),
+        "decision_coverage_fraction": torch.tensor(float(margin_tensor.numel()) / expected_decisions, dtype=dtype, device=device),
+        "forced_correct_fraction": forced_correct_tensor.mean(),
+        "forced_wrong_fraction": forced_wrong_tensor.mean(),
+        "neutral_decline_fraction": decline_tensor.mean(),
+        "confident_fraction": confident_tensor.mean(),
+        "confident_correct_bind_fraction": confident_correct_tensor.mean(),
+        "confident_wrong_bind_fraction": confident_wrong_tensor.mean(),
+        "correct_decline_fraction": correct_decline_tensor.mean(),
+        "wrong_decline_fraction": wrong_decline_tensor.mean(),
+        "decline_precision": correct_decline_tensor.sum() / decline_tensor.sum().clamp_min(1e-6),
+        "confident_accuracy": confident_correct_tensor.sum() / confident_tensor.sum().clamp_min(1e-6),
+        "decision_margin_mean": margin_tensor.mean(),
+        "decision_margin_p10": _quantile_or_zero(margin_tensor, 0.10, zero),
+        "endpoint_uncertainty_mean": uncertainty_tensor.mean(),
+        "margin_to_uncertainty_mean": (margin_tensor / uncertainty_tensor.clamp_min(1e-6)).mean(),
+        "assignment_object_file_id_usage": zero,
+        "assignment_object_id_usage": zero,
+        "assignment_sequence_id_usage": zero,
+    }
+
+
 def _all_track_endpoint_spacing_metrics(
     predicted_positions: torch.Tensor,
     predicted_valid: torch.Tensor,
@@ -1274,6 +1444,14 @@ def _all_track_endpoint_spacing_metrics(
             "endpoint_error_max": zero,
             "endpoint_error_to_spacing_ratio": zero,
             "endpoint_p90_to_spacing_ratio": zero,
+            "shared_track_endpoint_error_mean": zero,
+            "shared_track_endpoint_error_p90": zero,
+            "extra_track_endpoint_error_mean": zero,
+            "extra_track_endpoint_error_p90": zero,
+            "track0_endpoint_error_mean": zero,
+            "track1_endpoint_error_mean": zero,
+            "track2_endpoint_error_mean": zero,
+            "track3_endpoint_error_mean": zero,
         }
 
     file_count = min(predicted_positions.shape[0], predicted_valid.shape[0], file_instance_labels.shape[0])
@@ -1294,6 +1472,14 @@ def _all_track_endpoint_spacing_metrics(
             "endpoint_error_max": zero,
             "endpoint_error_to_spacing_ratio": zero,
             "endpoint_p90_to_spacing_ratio": zero,
+            "shared_track_endpoint_error_mean": zero,
+            "shared_track_endpoint_error_p90": zero,
+            "extra_track_endpoint_error_mean": zero,
+            "extra_track_endpoint_error_p90": zero,
+            "track0_endpoint_error_mean": zero,
+            "track1_endpoint_error_mean": zero,
+            "track2_endpoint_error_mean": zero,
+            "track3_endpoint_error_mean": zero,
         }
 
     predicted_positions = predicted_positions[:file_count].to(device=device, dtype=dtype)
@@ -1305,6 +1491,9 @@ def _all_track_endpoint_spacing_metrics(
     min_spacings: list[torch.Tensor] = []
     mean_spacings: list[torch.Tensor] = []
     endpoint_errors: list[torch.Tensor] = []
+    shared_track_errors: list[torch.Tensor] = []
+    extra_track_errors: list[torch.Tensor] = []
+    track_errors: list[list[torch.Tensor]] = [[], [], [], []]
     valid_rows = 0
     for row in range(query_count):
         row_predictions = []
@@ -1332,8 +1521,15 @@ def _all_track_endpoint_spacing_metrics(
         min_spacings.append(pair_values.min())
         mean_spacings.append(pair_values.mean())
         endpoint_errors.append(errors)
+        shared_track_errors.append(errors[: min(2, errors.numel())])
+        if errors.numel() > 2:
+            extra_track_errors.append(errors[2:])
+        for track_idx in range(min(4, errors.numel())):
+            track_errors[track_idx].append(errors[track_idx])
 
     all_errors = torch.cat(endpoint_errors) if endpoint_errors else torch.empty(0, dtype=dtype, device=device)
+    shared_errors = torch.cat(shared_track_errors) if shared_track_errors else torch.empty(0, dtype=dtype, device=device)
+    extra_errors = torch.cat(extra_track_errors) if extra_track_errors else torch.empty(0, dtype=dtype, device=device)
     min_spacing_mean = _mean_or_zero(min_spacings, zero)
     endpoint_p90 = _quantile_or_zero(all_errors, 0.90, zero)
     return {
@@ -1350,6 +1546,14 @@ def _all_track_endpoint_spacing_metrics(
         "endpoint_error_max": all_errors.max() if all_errors.numel() > 0 else zero,
         "endpoint_error_to_spacing_ratio": (all_errors.mean() / min_spacing_mean.clamp_min(1e-6)) if all_errors.numel() > 0 else zero,
         "endpoint_p90_to_spacing_ratio": endpoint_p90 / min_spacing_mean.clamp_min(1e-6),
+        "shared_track_endpoint_error_mean": shared_errors.mean() if shared_errors.numel() > 0 else zero,
+        "shared_track_endpoint_error_p90": _quantile_or_zero(shared_errors, 0.90, zero),
+        "extra_track_endpoint_error_mean": extra_errors.mean() if extra_errors.numel() > 0 else zero,
+        "extra_track_endpoint_error_p90": _quantile_or_zero(extra_errors, 0.90, zero),
+        "track0_endpoint_error_mean": _mean_or_zero(track_errors[0], zero),
+        "track1_endpoint_error_mean": _mean_or_zero(track_errors[1], zero),
+        "track2_endpoint_error_mean": _mean_or_zero(track_errors[2], zero),
+        "track3_endpoint_error_mean": _mean_or_zero(track_errors[3], zero),
     }
 
 
@@ -3614,6 +3818,19 @@ class Self(nn.Module):
                                     ),
                                 ))
                                 diagnostics.update(_prefix_metrics(
+                                    "reappeared_dynamics_neutral_all_file_slot_",
+                                    _all_track_neutral_file_slot_metrics(
+                                        dynamics_position.detach().to(image_t.dtype),
+                                        file_slot_valid,
+                                        source_sequences,
+                                        slot_output.position.to(image_t.dtype),
+                                        slot_output.valid,
+                                        all_positions_for_reappeared,
+                                        all_file_ids_for_reappeared,
+                                        self.cfg,
+                                    ),
+                                ))
+                                diagnostics.update(_prefix_metrics(
                                     "reappeared_dynamics_all_endpoint_",
                                     _all_track_endpoint_spacing_metrics(
                                         dynamics_position.detach().to(image_t.dtype),
@@ -3787,6 +4004,19 @@ class Self(nn.Module):
                                             slot_output.valid,
                                             source_sequences,
                                             source_sequences,
+                                            all_positions_for_reappeared,
+                                            all_file_ids_for_reappeared,
+                                            self.cfg,
+                                        ),
+                                    ))
+                                    diagnostics.update(_prefix_metrics(
+                                        "reappeared_ballistic_neutral_all_file_slot_",
+                                        _all_track_neutral_file_slot_metrics(
+                                            ballistic_position.detach().to(image_t.dtype),
+                                            ballistic_file_slot_valid,
+                                            source_sequences,
+                                            slot_output.position.to(image_t.dtype),
+                                            slot_output.valid,
                                             all_positions_for_reappeared,
                                             all_file_ids_for_reappeared,
                                             self.cfg,
