@@ -17,20 +17,21 @@ This ledger records the current experimental status of the temporal object-conti
 11. Context-aware learned candidate gating improves lookup without densifying Definitions: yes.
 12. Object files carry explicit phase/trajectory state: yes, scaffolded.
 13. Learned phase/trajectory dynamics predicts reappearance position better than naive velocity: yes.
-14. Predicted reappearance position is load-bearing for explicit candidate masking: no.
+14. Predicted reappearance position is load-bearing for local file-to-slot binding: yes, on curved contested motion.
 15. Position channels are load-bearing inside feature-only binding: yes, under ablation control.
-16. Binding representations preserve recoverable position: partial. Visible reappeared Definition/file-query binding features now preserve position; memory-conditioned source features remain weak.
-17. Same-class contested two-object continuity: failed initial test.
-18. Object-file expectation predicts its own future Definition state: partial, still weak.
-19. Full exact object permanence: not yet.
+16. Binding representations preserve recoverable position: yes for object-local slots; partial for scene/global binding states.
+17. Same-class contested local file-to-slot continuity: passed when slots are clean and dynamics endpoint is learned.
+18. Global same-class file retrieval: not yet.
+19. Object-file expectation predicts its own future Definition state: partial, still weak.
+20. Full exact object permanence: not yet.
 
 ## Current Claim
 
-TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance in the original single-target stream. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. A learned active gate can recover part of that live set from Definition/file geometry and context without position input, but it is still weaker than the scaffold. Object files now carry scaffolded phase/trajectory state, and a learned dynamics head can predict reappearance position much better than the naive velocity projection. A position-aware binding interface exposes reappeared position in the visible Definition/file-query representations for the single-target stream. Position ablation shows that feature-only binding uses those coordinate channels there. The contested two-object stream breaks that partial win: visible binding position is no longer target-specific enough when two same-class objects are present. Full object permanence is still not solved because visible reappeared state does not bind cleanly back to the exact object file under contested global lookup.
+TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance in the original single-target stream. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. Object-local slots solve the visible same-class scene-mush problem in the contested stream. Oracle endpoint binding proves the slot assignment logic is correct, and the curved contested stream proves learned trajectory dynamics can beat hand ballistic motion and recover perfect local file-to-slot binding. Full object permanence is still not solved because global same-class file retrieval and live candidate-set control remain weak.
 
 ## Next Target
 
-The next mechanism should be Probe 2: prediction-error competition over full expected reappearance state. Each active object file should predict an expected reappearance state, the actual percept should arrive, and the file with the lowest local prediction error should own the reappearance. Do not add another expectation loss, governance layer, or broad similarity head before testing this ownership mechanism.
+The next mechanism should focus on live candidate-set / memory-index control. Local slots, local assignment, and learned trajectory dynamics now work under the curved contested gate. The remaining failure is global retrieval: the system must keep the relevant competing object files live without object-label help, then run the already validated local file-to-slot binding inside that live set. Do not add governance, action, or broad similarity heads before fixing live candidate selection.
 
 ## Active Candidate-Gating Result
 
@@ -695,4 +696,63 @@ Latest held-out checkpoint:
 - correlated oracle target / pair / ratio: `1.000` / `1.000` / `1.000`
 - heavy-tail oracle target / pair / ratio: `0.737` / `0.737` / `1.543`
 
-This corrects the prior interpretation. The learned head is not mainly compressing both tracks into the midpoint: predicted pair distance is only mildly compressed, midpoint pull is slightly negative, and correlated shared-shift noise does not hurt assignment. The local learned-dynamics binding result is also much better than the global predicted-position result, so `0.119` is mostly a live-candidate/global-selection failure, not purely an endpoint metrology failure. The learned endpoint error is heavy-tailed and anti-correlated across paired files; the synthetic heavy-tail injection reproduces the local learned-dynamics result closely (`0.737` vs `0.747`). The hand ballistic endpoint has worse mean error but perfect local assignment, which means the learned residual is bending some cases in identity-damaging ways. The next target should be a bounded residual-from-ballistic dynamics head plus a live local candidate set that keeps only the relevant competing files.
+This corrects the prior interpretation. The learned head is not mainly compressing both tracks into the midpoint: predicted pair distance is only mildly compressed, midpoint pull is slightly negative, and correlated shared-shift noise does not hurt assignment. The local learned-dynamics binding result is also much better than the global predicted-position result, so `0.119` is mostly a live-candidate/global-selection failure, not purely an endpoint metrology failure. The learned endpoint error is heavy-tailed and anti-correlated across paired files; the synthetic heavy-tail injection reproduces the local learned-dynamics result closely (`0.737` vs `0.747`). The hand ballistic endpoint has worse mean error but perfect local assignment, which means the learned residual is bending some cases in identity-damaging ways.
+
+The narrower claim is now: local contested file-to-slot binding works when the endpoint trajectory model is correct. On the current contested-position stream, that endpoint model is partly hand-supplied by the simple motion rule. The generator's X coordinate is linear in phase, while Y has only a small stepped drift, so constant-velocity extrapolation is too close to a closed-form solution for held-out local binding. This is a valid architecture milestone for slots and assignment, but not proof that TSM has learned a nontrivial trajectory model.
+
+## Curved Contested Motion Gate
+
+Config added: `configs/temporal_objects_contested_curved.yaml`
+
+Dataset added: `temporal_objects_contested_curved`
+
+This stream preserves the earned substrate:
+
+- two same-class object tracks per scene.
+- two object-local visible slots.
+- no object identity labels in file-to-slot assignment.
+- oracle endpoint, ballistic endpoint, learned dynamics endpoint, local file-to-slot, and global retrieval diagnostics remain side by side.
+
+The motion rule changes. Instead of phase-linear X with stepped Y, each track follows deterministic phase offsets that make the last visible `phase 1 -> 2` velocity a poor predictor of the hidden `phase 2 -> 0` continuation. The reappearance endpoints remain separable, but the hand ballistic endpoint is no longer an oracle.
+
+Unit-level generator gate:
+
+- curved true reappearance tracks remain separated by more than `8 px`.
+- curved local ballistic pair assignment is below `0.75` across train/test/held-out splits.
+- oracle endpoint assignment should still be `1.000` once the model exposes clean slots.
+
+Next experiment:
+
+- train `configs/temporal_objects_contested_curved.yaml`.
+- compare oracle endpoint vs ballistic endpoint vs learned dynamics endpoint on local file-to-slot binding.
+- call the next milestone only if learned/residual dynamics beats ballistic on the curved stream while oracle remains perfect and slot recovery remains clean.
+
+## Curved Contested Motion Result
+
+Run: `runs/20260602_115937_temporal_objects_contested_curved`
+
+Config: `configs/temporal_objects_contested_curved.yaml`
+
+Held-out/test evaluation confirms the intended discriminator:
+
+- nonlinear contested motion fraction: `1.000`
+- slot pair position error: `0.009`
+- slot position R2: `0.999995`
+- oracle local target / pair: `1.000` / `1.000`
+- ballistic local target / pair: `0.505` / `0.505`
+- learned dynamics local target / pair: `1.000` / `1.000`
+- ballistic endpoint error: `0.416`
+- learned dynamics endpoint error: `0.163`
+- learned-over-ballistic endpoint improvement: `+0.253`
+- learned endpoint p95 / max: `0.296` / `0.298`
+- global learned file-slot target / pair: `0.281` / `0.000`
+
+This is the missing trajectory discriminator. The curved generator breaks the hand ballistic endpoint as a local assignment key while preserving clean slots and perfect oracle assignment. After training, the learned dynamics endpoint recovers perfect local same-class file-to-slot binding and sharply improves endpoint error over ballistic.
+
+Narrow claim:
+
+TSM can learn a nontrivial deterministic object-file trajectory model that supports contested local file-to-slot binding across occlusion.
+
+Boundary:
+
+This still does not solve global file retrieval. The global learned file-slot path remains weak (`0.281` target, `0.000` pair), so the remaining problem is live candidate-set / memory-index control, not local slots, local assignment, or trajectory dynamics.

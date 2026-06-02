@@ -323,6 +323,49 @@ def _contested_position(
     return int(x), int(y)
 
 
+def _contested_curved_position(
+    model_cfg: TsmConfig,
+    scene_id: int,
+    track_id: int,
+    phase: int,
+    split: str,
+) -> tuple[int, int]:
+    h = model_cfg.image_size
+    margin = max(4, h // 7)
+    span = max(1, h - 2 * margin)
+    phase = int(phase) % 5
+    base = (scene_id * 5) % span
+    y_base = ((scene_id % 4) * max(2, span // 6)) % span
+    y_sep = max(6, span // 2)
+    # Phase offsets make the visible 1->2 velocity an intentionally bad
+    # predictor of the hidden 2->0 continuation while preserving separability.
+    x_offsets = {
+        0: (1, 4, 7, 11, 14),
+        1: (span // 2 + 1, span // 2 - 2, span // 2 - 5, span // 2 - 9, span // 2 - 12),
+    }
+    y_offsets = {
+        0: (2, 5, 11, 13, 10),
+        1: (y_sep + 2, y_sep + 5, y_sep + 11, y_sep + 13, y_sep + 10),
+    }
+    track = 0 if track_id == 0 else 1
+    x = margin + ((base + x_offsets[track][phase]) % span)
+    y = margin + ((y_base + y_offsets[track][phase]) % span)
+    return int(x), int(y)
+
+
+def _contested_motion_position(
+    model_cfg: TsmConfig,
+    scene_id: int,
+    track_id: int,
+    phase: int,
+    split: str,
+    motion: str = "linear",
+) -> tuple[int, int]:
+    if motion == "curved":
+        return _contested_curved_position(model_cfg, scene_id, track_id, phase, split)
+    return _contested_position(model_cfg, scene_id, track_id, phase, split)
+
+
 def _render_contested_frame(
     model_cfg: TsmConfig,
     scene_id: int,
@@ -331,6 +374,7 @@ def _render_contested_frame(
     target_visible: bool,
     target_occluded: bool,
     split: str,
+    motion: str = "linear",
 ) -> torch.Tensor:
     c = model_cfg.image_channels
     h = model_cfg.image_size
@@ -338,11 +382,18 @@ def _render_contested_frame(
     object_id = 1
     value = 0.62
     for track_id in range(2):
-        x, y = _contested_position(model_cfg, scene_id, track_id, phase, split)
+        x, y = _contested_motion_position(model_cfg, scene_id, track_id, phase, split, motion)
         is_target = track_id == target_track_id
         if is_target:
             if phase == 1 and target_visible:
-                prev_x, prev_y = _contested_position(model_cfg, scene_id, track_id, max(0, phase - 1), split)
+                prev_x, prev_y = _contested_motion_position(
+                    model_cfg,
+                    scene_id,
+                    track_id,
+                    max(0, phase - 1),
+                    split,
+                    motion,
+                )
                 _draw_temporal_object(image, object_id, prev_x, prev_y, value * 0.35)
             if phase == 2:
                 _draw_occluder(image, x + 2, y, split, opening=False)
@@ -352,7 +403,14 @@ def _render_contested_frame(
                 _draw_occluder(image, x, y, split, opening=phase >= 4)
         else:
             if phase == 1:
-                prev_x, prev_y = _contested_position(model_cfg, scene_id, track_id, max(0, phase - 1), split)
+                prev_x, prev_y = _contested_motion_position(
+                    model_cfg,
+                    scene_id,
+                    track_id,
+                    max(0, phase - 1),
+                    split,
+                    motion,
+                )
                 _draw_temporal_object(image, object_id, prev_x, prev_y, value * 0.25)
             _draw_temporal_object(image, object_id, x, y, value * 0.92)
     return image.clamp(0.0, 1.0)
@@ -456,12 +514,19 @@ class ContestedTemporalObjectPermanenceDataset(Dataset):
         length: int = 1024,
         seed: int = 41,
         split: str = "train",
+        motion: str = "linear",
     ) -> None:
+        if motion not in {"linear", "curved"}:
+            raise ValueError(f"unsupported contested motion: {motion}")
         self.model_cfg = model_cfg
         self.length = length
         self.seed = seed
         self.split = split
-        self.dataset_id = _dataset_id("temporal_objects_contested_position")
+        self.motion = motion
+        self.dataset_name = (
+            "temporal_objects_contested_curved" if motion == "curved" else "temporal_objects_contested_position"
+        )
+        self.dataset_id = _dataset_id(self.dataset_name)
 
     def __len__(self) -> int:
         return self.length
@@ -494,6 +559,7 @@ class ContestedTemporalObjectPermanenceDataset(Dataset):
             visible_t,
             occluded_t,
             self.split,
+            self.motion,
         )
         image_tp1 = _render_contested_frame(
             self.model_cfg,
@@ -503,12 +569,34 @@ class ContestedTemporalObjectPermanenceDataset(Dataset):
             visible_tp1,
             occluded_tp1,
             self.split,
+            self.motion,
         )
-        x_t, y_t = _contested_position(self.model_cfg, scene_id, track_id, phase, self.split)
-        x_tp1, y_tp1 = _contested_position(self.model_cfg, scene_id, track_id, next_phase, self.split)
+        x_t, y_t = _contested_motion_position(self.model_cfg, scene_id, track_id, phase, self.split, self.motion)
+        x_tp1, y_tp1 = _contested_motion_position(
+            self.model_cfg,
+            scene_id,
+            track_id,
+            next_phase,
+            self.split,
+            self.motion,
+        )
         other_track_id = 1 - track_id
-        other_x_t, other_y_t = _contested_position(self.model_cfg, scene_id, other_track_id, phase, self.split)
-        other_x_tp1, other_y_tp1 = _contested_position(self.model_cfg, scene_id, other_track_id, next_phase, self.split)
+        other_x_t, other_y_t = _contested_motion_position(
+            self.model_cfg,
+            scene_id,
+            other_track_id,
+            phase,
+            self.split,
+            self.motion,
+        )
+        other_x_tp1, other_y_tp1 = _contested_motion_position(
+            self.model_cfg,
+            scene_id,
+            other_track_id,
+            next_phase,
+            self.split,
+            self.motion,
+        )
         return {
             "image_t": image_t,
             "image_tp1": image_tp1,
@@ -532,6 +620,7 @@ class ContestedTemporalObjectPermanenceDataset(Dataset):
             "distractor_position_t": torch.tensor([other_x_t, other_y_t], dtype=torch.float32),
             "distractor_position_tp1": torch.tensor([other_x_tp1, other_y_tp1], dtype=torch.float32),
             "same_class_contested": torch.tensor(1.0, dtype=torch.float32),
+            "nonlinear_contested_motion": torch.tensor(float(self.motion == "curved"), dtype=torch.float32),
             "identity_swap_violation": torch.tensor(0.0, dtype=torch.float32),
         }
 
@@ -548,14 +637,21 @@ def make_dataset(data_cfg: DatasetConfig, model_cfg: TsmConfig) -> Dataset:
     if data_cfg.name in {
         "temporal_objects_two_object",
         "temporal_objects_contested_position",
+        "temporal_objects_contested_curved",
+        "temporal_objects_contested_nonlinear",
         "object_permanence_contested",
     }:
         split = data_cfg.variant or data_cfg.split
+        motion = "curved" if data_cfg.name in {
+            "temporal_objects_contested_curved",
+            "temporal_objects_contested_nonlinear",
+        } else "linear"
         return ContestedTemporalObjectPermanenceDataset(
             model_cfg,
             length=data_cfg.limit or 1024,
             seed=data_cfg.seed,
             split=split,
+            motion=motion,
         )
     Path(data_cfg.cache_dir).mkdir(parents=True, exist_ok=True)
     return ImageStreamDataset(data_cfg, model_cfg)

@@ -7,6 +7,7 @@ from tsm.data import (
     ImageStreamDataset,
     MultiModeSyntheticImageStreamDataset,
     TemporalObjectPermanenceDataset,
+    _contested_curved_position,
     _contested_position,
     make_dataset,
 )
@@ -100,6 +101,56 @@ def test_contested_reappeared_trajectories_are_separable():
         assert torch.stack(distances).min().item() > 8.0
 
 
+def _wrapped_pair_assignment_accuracy(cfg: TsmConfig, position_fn, split: str) -> float:
+    margin = max(4, cfg.image_size // 7)
+    span = max(1, cfg.image_size - 2 * margin)
+    correct = 0
+    total = 0
+    for scene_id in range(16):
+        for target_track in (0, 1):
+            file_predictions = []
+            true_positions = []
+            for track_id in (target_track, 1 - target_track):
+                p1 = torch.tensor(position_fn(cfg, scene_id, track_id, 1, split), dtype=torch.float32)
+                p2 = torch.tensor(position_fn(cfg, scene_id, track_id, 2, split), dtype=torch.float32)
+                velocity = p2 - p1
+                projected = ((p2 + velocity * 3.0 - margin) % span) + margin
+                file_predictions.append(projected)
+                true_positions.append(torch.tensor(position_fn(cfg, scene_id, track_id, 0, split), dtype=torch.float32))
+            query = torch.stack(true_positions)
+            files = torch.stack(file_predictions)
+            diff = (query.unsqueeze(1) - files.unsqueeze(0)).abs()
+            diff = torch.minimum(diff, (span - diff).abs())
+            assignment = diff.square().sum(dim=-1).sqrt().argmin(dim=1)
+            correct += int(assignment[0].item() == 0 and assignment[1].item() == 1)
+            total += 1
+    return correct / max(1, total)
+
+
+def test_contested_curved_trajectories_are_separable_but_not_ballistic_oracle():
+    cfg = TsmConfig(d_model=16, image_size=28, image_channels=1)
+    for split in ("train", "test", "heldout"):
+        distances = []
+        for scene_id in range(16):
+            pos_a = torch.tensor(_contested_curved_position(cfg, scene_id, 0, 0, split), dtype=torch.float32)
+            pos_b = torch.tensor(_contested_curved_position(cfg, scene_id, 1, 0, split), dtype=torch.float32)
+            distances.append(torch.linalg.vector_norm(pos_a - pos_b))
+        assert torch.stack(distances).min().item() > 8.0
+        assert _wrapped_pair_assignment_accuracy(cfg, _contested_curved_position, split) < 0.75
+
+
+def test_contested_curved_dataset_exposes_nonlinear_motion_flag():
+    cfg = TsmConfig(d_model=16, image_size=28, image_channels=1)
+    ds = ContestedTemporalObjectPermanenceDataset(cfg, length=12, seed=13, motion="curved")
+
+    item = ds[8]
+
+    assert item["same_class_contested"].item() == 1.0
+    assert item["nonlinear_contested_motion"].item() == 1.0
+    assert item["visible_tp1"].item() == 1.0
+    assert item["distractor_position_tp1"].shape == (2,)
+
+
 def test_make_dataset_supports_temporal_object_alias():
     cfg = TsmConfig(d_model=16, image_size=28, image_channels=1)
     ds = make_dataset(DatasetConfig(name="object_permanence", split="train", limit=7, seed=3), cfg)
@@ -116,4 +167,16 @@ def test_make_dataset_supports_contested_temporal_object_alias():
     )
 
     assert isinstance(ds, ContestedTemporalObjectPermanenceDataset)
+    assert len(ds) == 7
+
+
+def test_make_dataset_supports_contested_curved_temporal_object_alias():
+    cfg = TsmConfig(d_model=16, image_size=28, image_channels=1)
+    ds = make_dataset(
+        DatasetConfig(name="temporal_objects_contested_curved", split="train", limit=7, seed=3),
+        cfg,
+    )
+
+    assert isinstance(ds, ContestedTemporalObjectPermanenceDataset)
+    assert ds.motion == "curved"
     assert len(ds) == 7

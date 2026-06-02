@@ -504,6 +504,7 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "object_position_t": torch.zeros(5, 2),
         "object_position_tp1": torch.zeros(5, 2),
         "distractor_position_tp1": torch.ones(5, 2) * 8.0,
+        "nonlinear_contested_motion": torch.ones(5),
     }
 
     out = model.forward_train(batch)
@@ -519,6 +520,7 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "object_file_id_auxiliary_label_usage",
         "temporal_occluded_fraction",
         "temporal_reappeared_fraction",
+        "temporal_nonlinear_contested_motion_fraction",
         "temporal_sae_occlusion_delta",
         "temporal_prediction_occluded_mean",
         "temporal_prediction_visible_mean",

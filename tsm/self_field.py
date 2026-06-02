@@ -2441,6 +2441,9 @@ class Self(nn.Module):
             if "same_class_contested" in batch:
                 contested = batch["same_class_contested"].to(device=image_t.device, dtype=image_t.dtype)
                 diagnostics["temporal_same_class_contested_fraction"] = contested.mean()
+            if "nonlinear_contested_motion" in batch:
+                nonlinear = batch["nonlinear_contested_motion"].to(device=image_t.device, dtype=image_t.dtype)
+                diagnostics["temporal_nonlinear_contested_motion_fraction"] = nonlinear.mean()
             if "object_file_id" in batch:
                 diagnostics["object_file_id_storage_key_present"] = torch.ones((), dtype=image_t.dtype, device=image_t.device)
                 diagnostics["object_file_id_bind_time_candidate_filter_usage"] = _zero_like_scalar(image_t)
