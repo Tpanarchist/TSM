@@ -381,10 +381,13 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                         for summary_name, metric_prefix in (
                             ("reappeared_oracle_position_global_file_slot", "reappeared_oracle_position_global_file_slot_"),
                             ("reappeared_oracle_position_ceiling_file_slot", "reappeared_oracle_position_ceiling_file_slot_"),
+                            ("reappeared_oracle_all_file_slot", "reappeared_oracle_all_file_slot_"),
                             ("reappeared_oracle_position_file_slot", "reappeared_oracle_position_file_slot_"),
                             ("reappeared_dynamics_local_file_slot", "reappeared_dynamics_local_file_slot_"),
+                            ("reappeared_dynamics_all_file_slot", "reappeared_dynamics_all_file_slot_"),
                             ("reappeared_ballistic_file_slot", "reappeared_ballistic_file_slot_"),
                             ("reappeared_ballistic_local_file_slot", "reappeared_ballistic_local_file_slot_"),
+                            ("reappeared_ballistic_all_file_slot", "reappeared_ballistic_all_file_slot_"),
                             ("reappeared_active_file_slot", "reappeared_active_file_slot_"),
                             ("reappeared_predicted_position_file_slot", "reappeared_predicted_position_file_slot_"),
                             ("reappeared_feature_only_file_slot", "reappeared_feature_only_file_slot_"),
@@ -393,11 +396,19 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                             target_key = f"{metric_prefix}target_match_accuracy"
                             if target_key in last_metrics:
                                 handle.write(f"- final_{summary_name}_target_match_accuracy: {last_metrics[target_key]:.3f}\n")
-                                handle.write(f"- final_{summary_name}_target_hard_match_accuracy: {last_metrics[f'{metric_prefix}target_hard_match_accuracy']:.3f}\n")
-                                handle.write(f"- final_{summary_name}_distractor_match_accuracy: {last_metrics[f'{metric_prefix}distractor_match_accuracy']:.3f}\n")
-                                handle.write(f"- final_{summary_name}_pair_match_accuracy: {last_metrics[f'{metric_prefix}pair_match_accuracy']:.3f}\n")
-                                handle.write(f"- final_{summary_name}_candidate_mean_count: {last_metrics[f'{metric_prefix}candidate_mean_count']:.3f}\n")
-                                handle.write(f"- final_{summary_name}_target_file_recall: {last_metrics[f'{metric_prefix}target_file_recall_fraction']:.3f}\n")
+                                for metric_name in (
+                                    "target_hard_match_accuracy",
+                                    "distractor_match_accuracy",
+                                    "pair_match_accuracy",
+                                    "object_match_accuracy",
+                                    "set_match_accuracy",
+                                    "candidate_mean_count",
+                                    "target_file_recall_fraction",
+                                    "row_coverage_fraction",
+                                ):
+                                    key = f"{metric_prefix}{metric_name}"
+                                    if key in last_metrics:
+                                        handle.write(f"- final_{summary_name}_{metric_name}: {last_metrics[key]:.3f}\n")
                         for noise_px in (0, 1, 2, 3, 4, 6, 7, 8):
                             noise_prefix = f"reappeared_oracle_noise_file_slot_noise_{noise_px}px_"
                             target_key = f"{noise_prefix}target_match_accuracy"

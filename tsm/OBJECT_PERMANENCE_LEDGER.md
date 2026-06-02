@@ -20,18 +20,19 @@ This ledger records the current experimental status of the temporal object-conti
 14. Predicted reappearance position is load-bearing for local file-to-slot binding: yes, on curved contested motion.
 15. Position channels are load-bearing inside feature-only binding: yes, under ablation control.
 16. Binding representations preserve recoverable position: yes for object-local slots; partial for scene/global binding states.
-17. Same-class contested local file-to-slot continuity: passed when slots are clean and dynamics endpoint is learned.
-18. Global same-class file retrieval: not yet.
-19. Object-file expectation predicts its own future Definition state: partial, still weak.
-20. Full exact object permanence: not yet.
+17. Same-class contested local file-to-slot continuity: passed for 2 objects across seeds and initial-pass for 3 objects.
+18. Four-object same-class local binding: partial; learned dynamics beats ballistic but full-set assignment is load-fragile.
+19. Global same-class file retrieval: not yet.
+20. Object-file expectation predicts its own future Definition state: partial, still weak.
+21. Full exact object permanence: not yet.
 
 ## Current Claim
 
-TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance in the original single-target stream. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. Object-local slots solve the visible same-class scene-mush problem in the contested stream. Oracle endpoint binding proves the slot assignment logic is correct, and the curved contested stream proves learned trajectory dynamics can beat hand ballistic motion and recover perfect local file-to-slot binding. Full object permanence is still not solved because global same-class file retrieval and live candidate-set control remain weak.
+TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance in the original single-target stream. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. Object-local slots solve the visible same-class scene-mush problem in the contested stream. Oracle endpoint binding proves the slot assignment logic is correct, and the curved contested stream proves learned trajectory dynamics can beat hand ballistic motion and recover perfect local file-to-slot binding for two objects across seeds and for an initial three-object count sweep. Four-object local binding is partial rather than solved. Full object permanence is still not solved because global same-class file retrieval and live candidate-set control remain weak.
 
 ## Next Target
 
-The next mechanism should focus on live candidate-set / memory-index control. Local slots, local assignment, and learned trajectory dynamics now work under the curved contested gate. The remaining failure is global retrieval: the system must keep the relevant competing object files live without object-label help, then run the already validated local file-to-slot binding inside that live set. Do not add governance, action, or broad similarity heads before fixing live candidate selection.
+The next mechanism should focus on binding under load and live candidate-set / memory-index control. Local slots, local assignment, and learned trajectory dynamics work under the curved contested gate through three objects, but four-object local set binding degrades and global retrieval remains weak. The system must keep the relevant competing object files live without object-label help, then run the validated local file-to-slot binding inside that live set. Do not add governance, action, or broad similarity heads before fixing this candidate/load problem.
 
 ## Active Candidate-Gating Result
 
@@ -756,3 +757,52 @@ TSM can learn a nontrivial deterministic object-file trajectory model that suppo
 Boundary:
 
 This still does not solve global file retrieval. The global learned file-slot path remains weak (`0.281` target, `0.000` pair), so the remaining problem is live candidate-set / memory-index control, not local slots, local assignment, or trajectory dynamics.
+
+## Curved Two-Object Seed Sweep
+
+Run: `runs/20260602_124456_ternary_seed_sweep`
+
+Config: `configs/temporal_objects_contested_curved.yaml`
+
+Seeds: `31, 37, 43`
+
+Held-out/test summary:
+
+| seed | oracle all-set | ballistic all-set | learned all-set | learned object | slot R2 | slot pair err | ballistic err | learned err | global pair |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 31 | 1.000 | 0.505 | 1.000 | 1.000 | 0.999995 | 0.009 | 0.416 | 0.155 | 0.000 |
+| 37 | 1.000 | 0.505 | 1.000 | 1.000 | 0.999995 | 0.009 | 0.416 | 0.165 | 0.000 |
+| 43 | 1.000 | 0.505 | 1.000 | 1.000 | 0.999995 | 0.009 | 0.416 | 0.153 | 0.000 |
+
+This validates the two-object curved result across seeds. The learned dynamics endpoint repeatedly beats the ballistic prior and solves the local same-class file-to-slot assignment. The global pair metric remains `0.000` across seeds, so the local permanence substrate and the global memory-index problem are now clearly separated.
+
+## Curved Object-Count Sweep
+
+Run summary: `runs/curved_object_count_sweep_summary.json`
+
+Configs:
+
+- `configs/temporal_objects_contested_curved.yaml`
+- `configs/temporal_objects_contested_curved_3.yaml`
+- `configs/temporal_objects_contested_curved_4.yaml`
+
+Held-out/test summary:
+
+| objects | oracle all-set | ballistic all-set | ballistic object | learned all-set | learned object | slot R2 | slot pair err | ballistic err | learned err | global pair |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 1.000 | 0.505 | 0.505 | 1.000 | 1.000 | 0.999995 | 0.009 | 0.416 | 0.163 | 0.000 |
+| 3 | 1.000 | 0.273 | 0.424 | 1.000 | 1.000 | 0.998054 | 0.015 | 0.424 | 0.131 | 0.091 |
+| 4 | 1.000 | 0.000 | 0.186 | 0.258 | 0.629 | 0.998663 | 0.016 | 0.432 | 0.207 | 0.000 |
+
+This answers the first scaling question. Clean slots and oracle assignment survive through four same-class objects, so the perceptual slot layer and assignment audit are not the bottleneck. Learned trajectory binding scales from two to three objects under the curved generator. At four objects it becomes load-fragile: learned dynamics still beats ballistic in endpoint error and per-object assignment, but full local set binding falls to `0.258`.
+
+Current interpretation:
+
+- Two-object curved local permanence: repeatably validated.
+- Three-object curved local permanence: initial pass.
+- Four-object curved local permanence: partial; candidate-count/load fragility appears before global retrieval is fixed.
+- Global memory retrieval remains unsolved at every count.
+
+Next target:
+
+Improve binding under load before claiming general local permanence. The likely next mechanism is not broader cognition; it is a local live-set/assignment improvement that preserves the validated slot and trajectory dynamics while handling four competing same-class files. Candidate-set control and assignment should be evaluated together because the four-object failure resembles a scaled version of the global retrieval problem.

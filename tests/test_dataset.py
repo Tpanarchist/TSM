@@ -149,6 +149,27 @@ def test_contested_curved_dataset_exposes_nonlinear_motion_flag():
     assert item["nonlinear_contested_motion"].item() == 1.0
     assert item["visible_tp1"].item() == 1.0
     assert item["distractor_position_tp1"].shape == (2,)
+    assert item["all_object_positions_tp1"].shape == (2, 2)
+    assert item["all_object_file_ids"].shape == (2,)
+
+
+def test_contested_curved_dataset_supports_three_and_four_tracks():
+    cfg = TsmConfig(d_model=16, image_size=28, image_channels=1)
+    for track_count in (3, 4):
+        ds = ContestedTemporalObjectPermanenceDataset(
+            cfg,
+            length=track_count * 5,
+            seed=13,
+            motion="curved",
+            track_count=track_count,
+        )
+        item = ds[track_count * 4]
+
+        assert ds.track_count == track_count
+        assert item["contested_track_count"].item() == track_count
+        assert item["all_object_positions_tp1"].shape == (track_count, 2)
+        assert item["all_object_file_ids"].shape == (track_count,)
+        assert torch.unique(item["all_object_file_ids"]).numel() == track_count
 
 
 def test_make_dataset_supports_temporal_object_alias():
@@ -180,3 +201,16 @@ def test_make_dataset_supports_contested_curved_temporal_object_alias():
     assert isinstance(ds, ContestedTemporalObjectPermanenceDataset)
     assert ds.motion == "curved"
     assert len(ds) == 7
+
+
+def test_make_dataset_supports_contested_curved_count_aliases():
+    cfg = TsmConfig(d_model=16, image_size=28, image_channels=1)
+    for name, track_count in (
+        ("temporal_objects_contested_curved_3", 3),
+        ("temporal_objects_contested_curved_4", 4),
+    ):
+        ds = make_dataset(DatasetConfig(name=name, split="train", limit=7, seed=3), cfg)
+
+        assert isinstance(ds, ContestedTemporalObjectPermanenceDataset)
+        assert ds.motion == "curved"
+        assert ds.track_count == track_count

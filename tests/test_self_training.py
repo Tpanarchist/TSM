@@ -13,6 +13,8 @@ from tsm.self_field import (
     _active_file_feature_only_candidate_mask,
     _active_file_gate_input_dim,
     _active_file_gate_logits,
+    _all_track_file_slot_assignment_metrics,
+    _all_track_predicted_file_slot_metrics,
     _file_slot_assignment_metrics,
     _local_reappearance_images,
     _oracle_error_shape_file_slot_metrics,
@@ -430,6 +432,46 @@ def test_paired_predicted_file_slot_metrics_uses_local_file_pair():
     assert metrics["valid_pair_fraction"].item() == 1.0
 
 
+def test_all_track_file_slot_assignment_scores_full_local_set():
+    cfg = TsmConfig(image_size=16, object_slot_count=3)
+    all_positions = torch.tensor([[[2.0, 4.0], [8.0, 4.0], [12.0, 10.0]]])
+    metrics = _all_track_file_slot_assignment_metrics(
+        file_positions=all_positions + 0.1,
+        file_valid=torch.tensor([[True, True, True]]),
+        slot_positions=torch.tensor([[[12.0, 10.0], [2.0, 4.0], [8.0, 4.0]]]),
+        slot_valid=torch.tensor([[True, True, True]]),
+        all_positions=all_positions,
+        all_instance_labels=torch.tensor([[10, 11, 12]], dtype=torch.long),
+        target_instance_labels=torch.tensor([11], dtype=torch.long),
+        cfg=cfg,
+    )
+
+    assert metrics["object_count"].item() == 3.0
+    assert metrics["object_match_accuracy"].item() == 1.0
+    assert metrics["set_match_accuracy"].item() == 1.0
+    assert metrics["target_match_accuracy"].item() == 1.0
+    assert metrics["assignment_object_file_id_usage"].item() == 0.0
+
+
+def test_all_track_predicted_file_slot_metrics_gathers_scene_files():
+    cfg = TsmConfig(image_size=16, object_slot_count=3)
+    metrics = _all_track_predicted_file_slot_metrics(
+        predicted_positions=torch.tensor([[2.0, 4.0], [12.0, 10.0], [8.0, 4.0], [1.0, 1.0]]),
+        predicted_valid=torch.tensor([True, True, True, True]),
+        slot_positions=torch.tensor([[[12.0, 10.0], [2.0, 4.0], [8.0, 4.0]]]),
+        slot_valid=torch.tensor([[True, True, True]]),
+        file_instance_labels=torch.tensor([10, 12, 11, 99], dtype=torch.long),
+        target_instance_labels=torch.tensor([10], dtype=torch.long),
+        all_positions=torch.tensor([[[2.0, 4.0], [8.0, 4.0], [12.0, 10.0]]]),
+        all_instance_labels=torch.tensor([[10, 11, 12]], dtype=torch.long),
+        cfg=cfg,
+    )
+
+    assert metrics["object_match_accuracy"].item() == 1.0
+    assert metrics["set_match_accuracy"].item() == 1.0
+    assert metrics["candidate_mean_count"].item() == 3.0
+
+
 def test_active_file_ballistic_position_uses_phase_elapsed_with_wrap():
     cfg = TsmConfig(image_size=28, active_file_expectation_phase_count=5, active_file_candidate_wrap=True)
     memory = Memory()
@@ -504,6 +546,18 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "object_position_t": torch.zeros(5, 2),
         "object_position_tp1": torch.zeros(5, 2),
         "distractor_position_tp1": torch.ones(5, 2) * 8.0,
+        "all_object_positions_tp1": torch.stack((
+            torch.zeros(5, 2),
+            torch.ones(5, 2) * 8.0,
+        ), dim=1),
+        "all_object_file_ids": torch.tensor([
+            [0, 1],
+            [0, 1],
+            [2, 3],
+            [2, 3],
+            [0, 1],
+        ], dtype=torch.long),
+        "contested_track_count": torch.full((5,), 2, dtype=torch.long),
         "nonlinear_contested_motion": torch.ones(5),
     }
 
@@ -675,10 +729,19 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_dynamics_local_file_slot_distractor_match_accuracy",
         "reappeared_dynamics_local_file_slot_pair_match_accuracy",
         "reappeared_dynamics_local_file_slot_valid_pair_fraction",
+        "reappeared_dynamics_all_file_slot_object_count",
+        "reappeared_dynamics_all_file_slot_object_match_accuracy",
+        "reappeared_dynamics_all_file_slot_target_match_accuracy",
+        "reappeared_dynamics_all_file_slot_set_match_accuracy",
+        "reappeared_dynamics_all_file_slot_row_coverage_fraction",
         "reappeared_ballistic_endpoint_pair_distance_ratio",
         "reappeared_ballistic_endpoint_error_p95",
         "reappeared_ballistic_local_file_slot_target_match_accuracy",
         "reappeared_ballistic_local_file_slot_pair_match_accuracy",
+        "reappeared_ballistic_all_file_slot_object_match_accuracy",
+        "reappeared_ballistic_all_file_slot_set_match_accuracy",
+        "reappeared_oracle_all_file_slot_object_match_accuracy",
+        "reappeared_oracle_all_file_slot_set_match_accuracy",
         "reappeared_oracle_error_shape_file_slot_center_bias_target_match_accuracy",
         "reappeared_oracle_error_shape_file_slot_center_bias_pair_match_accuracy",
         "reappeared_oracle_error_shape_file_slot_center_bias_pair_distance_ratio",
