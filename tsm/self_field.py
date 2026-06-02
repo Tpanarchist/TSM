@@ -34,6 +34,10 @@ from .trauma import TraumaMonitor
 from .types import DriveState, TickOutput, TrainOutput
 
 
+ORACLE_POSITION_NOISE_SWEEP_PX = (0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 7.0, 8.0)
+ORACLE_POSITION_NOISE_SWEEP_TRIALS = 8
+
+
 def _mode_context_stats(
     mode: torch.Tensor,
     context_hard: torch.Tensor,
@@ -323,6 +327,47 @@ def _active_file_projected_position(
         margin = float(max(4, cfg.image_size // 7))
         projected = ((projected - margin) % float(wrap_span)) + margin
     valid = memory_read.position_valid[mask].to(device=device) & memory_read.velocity_valid[mask].to(device=device)
+    return projected, valid
+
+
+def _active_file_ballistic_position(
+    memory_read,
+    batch: dict[str, torch.Tensor],
+    mask: torch.Tensor,
+    cfg: TsmConfig,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    count = int(mask.to(torch.long).sum().item())
+    if count == 0:
+        return torch.zeros((0, 2), dtype=dtype, device=device), torch.zeros((0,), dtype=torch.bool, device=device)
+
+    position = memory_read.position[mask].to(device=device, dtype=dtype)
+    velocity = memory_read.velocity[mask].to(device=device, dtype=dtype)
+    valid = (
+        memory_read.position_valid[mask].to(device=device)
+        & memory_read.velocity_valid[mask].to(device=device)
+        & memory_read.hit[mask].to(device=device)
+    )
+
+    if "phase" in batch and bool(memory_read.phase_valid[mask].any().item()):
+        phase_count = max(1, int(cfg.active_file_expectation_phase_count))
+        current_phase = batch["phase"].to(device=device, dtype=dtype)[mask].view(-1, 1)
+        next_phase = torch.remainder(current_phase + 1.0, float(phase_count))
+        last_phase = memory_read.phase[mask].to(device=device, dtype=dtype)
+        elapsed = torch.remainder(next_phase - last_phase, float(phase_count))
+        elapsed = torch.where(elapsed <= 0.0, torch.ones_like(elapsed), elapsed)
+        valid = valid & memory_read.phase_valid[mask].to(device=device)
+    else:
+        elapsed = memory_read.age[mask].to(device=device, dtype=dtype).clamp_min(0.0) + 1.0
+
+    projected = position + velocity * elapsed
+    wrap_span = _active_file_wrap_span(cfg)
+    if wrap_span is not None and wrap_span > 0:
+        margin = float(max(4, cfg.image_size // 7))
+        projected = ((projected - margin) % float(wrap_span)) + margin
+    else:
+        projected = projected.clamp(0.0, float(cfg.image_size - 1))
     return projected, valid
 
 
@@ -1045,6 +1090,132 @@ def _oracle_pair_file_slot_ceiling_metrics(
         key: torch.stack(values).mean() if values else zero
         for key, values in collected.items()
     }
+
+
+def _oracle_pair_file_slot_noise_sweep_metrics(
+    slot_positions: torch.Tensor,
+    slot_valid: torch.Tensor,
+    target_positions: torch.Tensor,
+    target_instance_labels: torch.Tensor,
+    group_labels: torch.Tensor,
+    cfg: TsmConfig,
+    distractor_positions: torch.Tensor | None,
+    distractor_instance_labels: torch.Tensor | None,
+) -> dict[str, torch.Tensor]:
+    dtype = slot_positions.dtype
+    device = slot_positions.device
+    zero_base = _oracle_pair_file_slot_ceiling_metrics(
+        slot_positions,
+        slot_valid,
+        target_positions,
+        target_instance_labels,
+        group_labels,
+        cfg,
+        distractor_positions,
+        distractor_instance_labels,
+    )
+    if (
+        distractor_positions is None
+        or distractor_instance_labels is None
+        or distractor_positions.numel() == 0
+        or distractor_instance_labels.numel() == 0
+    ):
+        out: dict[str, torch.Tensor] = {}
+        for noise_px in ORACLE_POSITION_NOISE_SWEEP_PX:
+            label = f"{int(noise_px)}px"
+            for key, value in zero_base.items():
+                out[f"noise_{label}_{key}"] = value
+            out[f"noise_{label}_position_noise_px"] = torch.tensor(noise_px, dtype=dtype, device=device)
+            out[f"noise_{label}_position_noise_normalized"] = torch.tensor(
+                noise_px / float(max(1, cfg.image_size)),
+                dtype=dtype,
+                device=device,
+            )
+        return out
+
+    query_count = min(
+        slot_positions.shape[0],
+        slot_valid.shape[0],
+        target_positions.shape[0],
+        target_instance_labels.shape[0],
+        distractor_positions.shape[0],
+        distractor_instance_labels.shape[0],
+        group_labels.shape[0],
+    )
+    if query_count == 0:
+        out = {}
+        for noise_px in ORACLE_POSITION_NOISE_SWEEP_PX:
+            label = f"{int(noise_px)}px"
+            for key, value in zero_base.items():
+                out[f"noise_{label}_{key}"] = value
+            out[f"noise_{label}_position_noise_px"] = torch.tensor(noise_px, dtype=dtype, device=device)
+            out[f"noise_{label}_position_noise_normalized"] = torch.tensor(
+                noise_px / float(max(1, cfg.image_size)),
+                dtype=dtype,
+                device=device,
+            )
+        return out
+
+    target_positions = target_positions[:query_count].to(device=device, dtype=dtype)
+    distractor_positions = distractor_positions[:query_count].to(device=device, dtype=dtype)
+    target_instance_labels = target_instance_labels[:query_count].to(device=device, dtype=torch.long)
+    distractor_instance_labels = distractor_instance_labels[:query_count].to(device=device, dtype=torch.long)
+    group_labels = group_labels[:query_count].to(device=device, dtype=torch.long)
+    slot_positions = slot_positions[:query_count].to(device=device, dtype=dtype)
+    slot_valid = slot_valid[:query_count].to(device=device, dtype=torch.bool)
+
+    rows = torch.arange(query_count, device=device, dtype=dtype)
+
+    out: dict[str, torch.Tensor] = {}
+    for noise_px in ORACLE_POSITION_NOISE_SWEEP_PX:
+        label = f"{int(noise_px)}px"
+        collected: dict[str, list[torch.Tensor]] = {}
+        adversarial_delta = distractor_positions - target_positions
+        adversarial_direction = adversarial_delta / adversarial_delta.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+        for trial in range(ORACLE_POSITION_NOISE_SWEEP_TRIALS):
+            if trial == 0:
+                target_direction = adversarial_direction
+                distractor_direction = -adversarial_direction
+            else:
+                target_angle = rows * 1.61803398875 + 0.37 + float(trial) * 0.78539816339
+                distractor_angle = rows * 1.61803398875 + 2.11 + float(trial) * 1.17809724510
+                target_direction = torch.stack((torch.cos(target_angle), torch.sin(target_angle)), dim=-1)
+                distractor_direction = torch.stack((torch.cos(distractor_angle), torch.sin(distractor_angle)), dim=-1)
+            noisy_target = target_positions + target_direction * float(noise_px)
+            noisy_distractor = distractor_positions + distractor_direction * float(noise_px)
+            for row in range(query_count):
+                row_file_positions = torch.stack((noisy_target[row], noisy_distractor[row]), dim=0)
+                row_file_labels = torch.stack((target_instance_labels[row], distractor_instance_labels[row]), dim=0)
+                row_group_labels = group_labels[row].view(1).expand(2)
+                row_metrics = _file_slot_assignment_metrics(
+                    row_file_positions,
+                    torch.ones(2, dtype=torch.bool, device=device),
+                    slot_positions[row:row + 1],
+                    slot_valid[row:row + 1],
+                    target_positions[row:row + 1],
+                    row_file_labels,
+                    target_instance_labels[row:row + 1],
+                    row_group_labels,
+                    cfg,
+                    distractor_positions=distractor_positions[row:row + 1],
+                    distractor_instance_labels=distractor_instance_labels[row:row + 1],
+                )
+                for key, value in row_metrics.items():
+                    collected.setdefault(key, []).append(value)
+        for key, values in collected.items():
+            out[f"noise_{label}_{key}"] = torch.stack(values).mean() if values else zero_base[key]
+        out[f"noise_{label}_position_noise_px"] = torch.tensor(noise_px, dtype=dtype, device=device)
+        out[f"noise_{label}_position_noise_normalized"] = torch.tensor(
+            noise_px / float(max(1, cfg.image_size)),
+            dtype=dtype,
+            device=device,
+        )
+        out[f"noise_{label}_trial_count"] = torch.tensor(
+            float(ORACLE_POSITION_NOISE_SWEEP_TRIALS),
+            dtype=dtype,
+            device=device,
+        )
+    return out
 
 
 def _candidate_path_context_metrics(
@@ -1992,6 +2163,8 @@ class Self(nn.Module):
                     expected_query_scores = None
                     dynamics_position = None
                     dynamics_valid = None
+                    ballistic_position = None
+                    ballistic_valid = None
                     projected_position = None
                     needs_dynamics_position = (
                         self.cfg.active_file_dynamics_weight > 0.0
@@ -2155,6 +2328,22 @@ class Self(nn.Module):
                             position_error = _zero_like_scalar(image_t)
                         diagnostics["reappeared_trajectory_position_error"] = position_error
                         diagnostics["reappeared_trajectory_valid_fraction"] = projected_valid.to(image_t.dtype).mean()
+                        ballistic_position, ballistic_valid = _active_file_ballistic_position(
+                            memory_read,
+                            batch,
+                            reappeared_active,
+                            self.cfg,
+                            image_t.dtype,
+                            image_t.device,
+                        )
+                        if bool(ballistic_valid.any().item()):
+                            ballistic_error = (
+                                ballistic_position[ballistic_valid] - target_position[ballistic_valid]
+                            ).norm(dim=-1).mean() / float(max(1, self.cfg.image_size))
+                        else:
+                            ballistic_error = _zero_like_scalar(image_t)
+                        diagnostics["reappeared_ballistic_position_error"] = ballistic_error
+                        diagnostics["reappeared_ballistic_valid_fraction"] = ballistic_valid.to(image_t.dtype).mean()
                         if dynamics_position is not None and dynamics_valid is not None:
                             shared_valid = projected_valid & dynamics_valid
                             if bool(dynamics_valid.any().item()):
@@ -2176,6 +2365,23 @@ class Self(nn.Module):
                             diagnostics["reappeared_dynamics_position_error"] = dynamics_error
                             diagnostics["reappeared_dynamics_position_improvement"] = dynamics_improvement
                             diagnostics["reappeared_dynamics_valid_fraction"] = dynamics_valid.to(image_t.dtype).mean()
+                            shared_ballistic_valid = ballistic_valid & dynamics_valid
+                            if bool(shared_ballistic_valid.any().item()):
+                                shared_ballistic_error = (
+                                    ballistic_position[shared_ballistic_valid]
+                                    - target_position[shared_ballistic_valid]
+                                ).norm(dim=-1).mean() / float(max(1, self.cfg.image_size))
+                                shared_dynamics_for_ballistic_error = (
+                                    dynamics_position[shared_ballistic_valid]
+                                    - target_position[shared_ballistic_valid]
+                                ).norm(dim=-1).mean() / float(max(1, self.cfg.image_size))
+                                diagnostics["reappeared_dynamics_over_ballistic_position_improvement"] = (
+                                    shared_ballistic_error - shared_dynamics_for_ballistic_error
+                                )
+                            else:
+                                diagnostics["reappeared_dynamics_over_ballistic_position_improvement"] = (
+                                    _zero_like_scalar(image_t)
+                                )
                     file_binding_position = (
                         dynamics_position.detach()
                         if dynamics_position is not None
@@ -2484,6 +2690,49 @@ class Self(nn.Module):
                                 "reappeared_oracle_position_ceiling_file_slot_",
                                 _candidate_path_context_metrics(diagnostics, image_t),
                             ))
+                            diagnostics.update(_prefix_metrics(
+                                "reappeared_oracle_noise_file_slot_",
+                                _oracle_pair_file_slot_noise_sweep_metrics(
+                                    slot_output.position.to(image_t.dtype),
+                                    slot_output.valid,
+                                    target_position_for_reappeared,
+                                    source_sequences,
+                                    source_labels,
+                                    self.cfg,
+                                    slot_distractor_position,
+                                    distractor_sequences,
+                                ),
+                            ))
+                            if ballistic_position is not None and ballistic_valid is not None:
+                                ballistic_file_slot_valid = (
+                                    memory_read.position_valid[reappeared_active]
+                                    & memory_read.hit[reappeared_active]
+                                    & ballistic_valid.to(device=image_t.device, dtype=torch.bool)
+                                    & (
+                                        memory_read.age[reappeared_active].view(-1)
+                                        <= self.cfg.active_file_candidate_max_age
+                                    )
+                                )
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_ballistic_file_slot_",
+                                    _file_slot_assignment_metrics(
+                                        ballistic_position.detach().to(image_t.dtype),
+                                        ballistic_file_slot_valid,
+                                        slot_output.position.to(image_t.dtype),
+                                        slot_output.valid,
+                                        target_position_for_reappeared,
+                                        source_sequences,
+                                        source_sequences,
+                                        source_labels,
+                                        self.cfg,
+                                        distractor_positions=slot_distractor_position,
+                                        distractor_instance_labels=distractor_sequences,
+                                    ),
+                                ))
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_ballistic_file_slot_",
+                                    _candidate_path_context_metrics(diagnostics, image_t),
+                                ))
                             file_slot_candidate_paths: list[tuple[str, torch.Tensor, torch.Tensor]] = []
                             if active_candidates is not None:
                                 file_slot_candidate_paths.append((

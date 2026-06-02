@@ -607,3 +607,48 @@ Latest held-out checkpoint:
 - assignment audit object_file_id/object_id/sequence usage: `0.000` / `0.000` / `0.000`
 
 This separates mechanism failure from dynamics-precision failure. With perfect local endpoints, file-to-slot assignment works completely. With learned dynamics endpoints, it fails because the endpoint estimate is still too blurry: normalized error around `0.232-0.234` is about `6.5` px on a `28x28` frame, roughly half the true `12.806` px inter-object spacing. The next target is not richer appearance or context; it is a sharper trajectory endpoint predictor and/or a live-file candidate state that preserves the local two-file set without identity-label help.
+
+## Oracle Noise Sweep And Ballistic Baseline
+
+Run evaluated: `runs/20260602_064540_temporal_objects_contested_position`
+
+Config: `configs/temporal_objects_contested_position.yaml`
+
+This diagnostic adds two measurements without retraining:
+
+- oracle endpoint noise sweep: start from true target/distractor endpoints, inject deterministic pixel noise, then bind those noised endpoints to recovered slots by the same label-free file-to-slot position assignment.
+- hand ballistic baseline: predict reappearance as `last_visible_position + velocity * phase_elapsed`, using the same wrap geometry as the active-file projector.
+
+Best held-out checkpoint:
+
+- learned dynamics error / improvement / valid fraction: `0.234` / `+0.162` / `1.000`
+- ballistic error / dynamics-over-ballistic improvement / valid fraction: `0.248` / `+0.014` / `1.000`
+- predicted-position slot target / hard / pair: `0.119` / `0.119` / `0.030`
+- ballistic slot target / hard / pair / assignment error: `0.158` / `0.158` / `0.000` / `0.209`
+- oracle ceiling target / hard / pair: `1.000` / `1.000` / `1.000`
+- oracle noise 0 px target / pair / assignment error: `1.000` / `1.000` / `0.009`
+- oracle noise 1 px target / pair / assignment error: `1.000` / `1.000` / `0.036`
+- oracle noise 2 px target / pair / assignment error: `1.000` / `1.000` / `0.072`
+- oracle noise 3 px target / pair / assignment error: `1.000` / `1.000` / `0.107`
+- oracle noise 4 px target / pair / assignment error: `1.000` / `1.000` / `0.143`
+- oracle noise 6 px target / pair / assignment error: `1.000` / `1.000` / `0.214`
+- oracle noise 7 px target / pair / assignment error: `0.817` / `0.817` / `0.243`
+- oracle noise 8 px target / pair / assignment error: `0.725` / `0.725` / `0.264`
+
+Latest held-out checkpoint:
+
+- learned dynamics error / improvement / valid fraction: `0.232` / `+0.165` / `1.000`
+- ballistic error / dynamics-over-ballistic improvement / valid fraction: `0.248` / `+0.016` / `1.000`
+- predicted-position slot target / hard / pair: `0.119` / `0.119` / `0.030`
+- ballistic slot target / hard / pair / assignment error: `0.158` / `0.158` / `0.000` / `0.209`
+- oracle ceiling target / hard / pair: `1.000` / `1.000` / `1.000`
+- oracle noise 0 px target / pair / assignment error: `1.000` / `1.000` / `0.009`
+- oracle noise 1 px target / pair / assignment error: `1.000` / `1.000` / `0.036`
+- oracle noise 2 px target / pair / assignment error: `1.000` / `1.000` / `0.072`
+- oracle noise 3 px target / pair / assignment error: `1.000` / `1.000` / `0.107`
+- oracle noise 4 px target / pair / assignment error: `1.000` / `1.000` / `0.143`
+- oracle noise 6 px target / pair / assignment error: `1.000` / `1.000` / `0.214`
+- oracle noise 7 px target / pair / assignment error: `0.817` / `0.817` / `0.243`
+- oracle noise 8 px target / pair / assignment error: `0.725` / `0.725` / `0.264`
+
+The local two-file assignment mechanism tolerates endpoint noise through about `6 px` and starts degrading at `7 px`. The learned dynamics head sits at the edge of that budget: `0.232-0.234` normalized is about `6.5 px`. The hand ballistic baseline is worse at about `6.95 px`, and learned dynamics only improves it by `0.014-0.016` normalized, roughly `0.4 px`. The immediate target is therefore precise endpoint dynamics below the `6 px` cliff, plus preserving the relevant local live-file set. Appearance/context/gain routing remain unnecessary for this specific controlled failure.

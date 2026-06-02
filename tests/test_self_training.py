@@ -5,6 +5,7 @@ from tsm.memory import Memory
 from tsm.self_field import (
     Self,
     _active_file_candidate_mask,
+    _active_file_ballistic_position,
     _active_file_dynamics_features,
     _active_file_dynamics_input_dim,
     _active_file_dynamics_position,
@@ -15,6 +16,7 @@ from tsm.self_field import (
     _file_slot_assignment_metrics,
     _local_reappearance_images,
     _oracle_pair_file_slot_ceiling_metrics,
+    _oracle_pair_file_slot_noise_sweep_metrics,
     _state_prediction_error_matrix,
 )
 
@@ -339,6 +341,58 @@ def test_oracle_pair_file_slot_ceiling_uses_positions_without_identity_assignmen
     assert metrics["assignment_sequence_id_usage"].item() == 0.0
 
 
+def test_oracle_pair_file_slot_noise_sweep_reports_error_budget_curve():
+    cfg = TsmConfig(image_size=16, object_slot_count=2)
+    metrics = _oracle_pair_file_slot_noise_sweep_metrics(
+        slot_positions=torch.tensor([[[12.1, 4.0], [2.1, 4.0]]]),
+        slot_valid=torch.tensor([[True, True]]),
+        target_positions=torch.tensor([[2.0, 4.0]]),
+        target_instance_labels=torch.tensor([10], dtype=torch.long),
+        group_labels=torch.tensor([1], dtype=torch.long),
+        cfg=cfg,
+        distractor_positions=torch.tensor([[12.0, 4.0]]),
+        distractor_instance_labels=torch.tensor([11], dtype=torch.long),
+    )
+
+    assert metrics["noise_0px_target_match_accuracy"].item() == 1.0
+    assert metrics["noise_0px_pair_match_accuracy"].item() == 1.0
+    assert metrics["noise_1px_position_noise_px"].item() == 1.0
+    assert metrics["noise_6px_position_noise_normalized"].item() == 6.0 / 16.0
+    assert metrics["noise_6px_trial_count"].item() == 8.0
+    assert metrics["noise_8px_position_noise_px"].item() == 8.0
+    assert metrics["noise_6px_assignment_object_file_id_usage"].item() == 0.0
+
+
+def test_active_file_ballistic_position_uses_phase_elapsed_with_wrap():
+    cfg = TsmConfig(image_size=28, active_file_expectation_phase_count=5, active_file_candidate_wrap=True)
+    memory = Memory()
+    batch = {
+        "object_file_id": torch.zeros(3, dtype=torch.long),
+        "visible_t": torch.ones(3),
+        "phase": torch.tensor([0, 1, 2], dtype=torch.long),
+        "object_position_t": torch.tensor([[4.0, 4.0], [7.0, 4.0], [10.0, 5.0]]),
+    }
+    memory.read_write_object_files(batch, torch.rand(3, 4), step=0)
+    reappeared_batch = {
+        "object_file_id": torch.zeros(1, dtype=torch.long),
+        "visible_t": torch.zeros(1),
+        "phase": torch.tensor([4], dtype=torch.long),
+    }
+    read = memory.read_write_object_files(reappeared_batch, torch.rand(1, 4), step=1)
+
+    position, valid = _active_file_ballistic_position(
+        read,
+        reappeared_batch,
+        torch.tensor([True]),
+        cfg,
+        torch.float32,
+        torch.device("cpu"),
+    )
+
+    assert bool(valid.item())
+    assert torch.allclose(position, torch.tensor([[19.0, 8.0]]))
+
+
 def test_forward_train_reports_temporal_object_diagnostics():
     cfg = TsmConfig(
         d_model=32,
@@ -437,8 +491,11 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_expected_state_instance_hard_match_accuracy",
         "reappeared_trajectory_position_error",
         "reappeared_trajectory_valid_fraction",
+        "reappeared_ballistic_position_error",
+        "reappeared_ballistic_valid_fraction",
         "reappeared_dynamics_position_error",
         "reappeared_dynamics_position_improvement",
+        "reappeared_dynamics_over_ballistic_position_improvement",
         "reappeared_dynamics_valid_fraction",
         "reappeared_definition_position_linear_error",
         "reappeared_definition_position_linear_improvement",
@@ -506,6 +563,23 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_oracle_position_ceiling_file_slot_assignment_object_file_id_usage",
         "reappeared_oracle_position_ceiling_file_slot_assignment_object_id_usage",
         "reappeared_oracle_position_ceiling_file_slot_assignment_sequence_id_usage",
+        "reappeared_oracle_noise_file_slot_noise_0px_target_match_accuracy",
+        "reappeared_oracle_noise_file_slot_noise_1px_target_match_accuracy",
+        "reappeared_oracle_noise_file_slot_noise_2px_target_match_accuracy",
+        "reappeared_oracle_noise_file_slot_noise_3px_target_match_accuracy",
+        "reappeared_oracle_noise_file_slot_noise_4px_target_match_accuracy",
+        "reappeared_oracle_noise_file_slot_noise_6px_target_match_accuracy",
+        "reappeared_oracle_noise_file_slot_noise_7px_target_match_accuracy",
+        "reappeared_oracle_noise_file_slot_noise_8px_target_match_accuracy",
+        "reappeared_oracle_noise_file_slot_noise_6px_position_noise_normalized",
+        "reappeared_ballistic_file_slot_target_match_accuracy",
+        "reappeared_ballistic_file_slot_target_hard_match_accuracy",
+        "reappeared_ballistic_file_slot_distractor_match_accuracy",
+        "reappeared_ballistic_file_slot_pair_match_accuracy",
+        "reappeared_ballistic_file_slot_assignment_position_error",
+        "reappeared_ballistic_file_slot_assignment_object_file_id_usage",
+        "reappeared_ballistic_file_slot_assignment_object_id_usage",
+        "reappeared_ballistic_file_slot_assignment_sequence_id_usage",
         "reappeared_active_query_file_candidate_instance_match_accuracy",
         "reappeared_active_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_active_query_file_candidate_mean_count",

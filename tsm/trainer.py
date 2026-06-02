@@ -316,6 +316,10 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                         handle.write(f"- final_reappeared_dynamics_position_error: {last_metrics['reappeared_dynamics_position_error']:.6f}\n")
                         handle.write(f"- final_reappeared_dynamics_position_improvement: {last_metrics['reappeared_dynamics_position_improvement']:.6f}\n")
                         handle.write(f"- final_reappeared_dynamics_valid_fraction: {last_metrics['reappeared_dynamics_valid_fraction']:.3f}\n")
+                    if "reappeared_ballistic_position_error" in last_metrics:
+                        handle.write(f"- final_reappeared_ballistic_position_error: {last_metrics['reappeared_ballistic_position_error']:.6f}\n")
+                        handle.write(f"- final_reappeared_ballistic_valid_fraction: {last_metrics['reappeared_ballistic_valid_fraction']:.3f}\n")
+                        handle.write(f"- final_reappeared_dynamics_over_ballistic_position_improvement: {last_metrics['reappeared_dynamics_over_ballistic_position_improvement']:.6f}\n")
                     if "reappeared_definition_position_linear_error" in last_metrics:
                         handle.write(f"- final_reappeared_definition_position_linear_error: {last_metrics['reappeared_definition_position_linear_error']:.6f}\n")
                         handle.write(f"- final_reappeared_definition_position_linear_improvement: {last_metrics['reappeared_definition_position_linear_improvement']:.6f}\n")
@@ -363,6 +367,7 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                             ("reappeared_oracle_position_global_file_slot", "reappeared_oracle_position_global_file_slot_"),
                             ("reappeared_oracle_position_ceiling_file_slot", "reappeared_oracle_position_ceiling_file_slot_"),
                             ("reappeared_oracle_position_file_slot", "reappeared_oracle_position_file_slot_"),
+                            ("reappeared_ballistic_file_slot", "reappeared_ballistic_file_slot_"),
                             ("reappeared_active_file_slot", "reappeared_active_file_slot_"),
                             ("reappeared_predicted_position_file_slot", "reappeared_predicted_position_file_slot_"),
                             ("reappeared_feature_only_file_slot", "reappeared_feature_only_file_slot_"),
@@ -376,6 +381,13 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                                 handle.write(f"- final_{summary_name}_pair_match_accuracy: {last_metrics[f'{metric_prefix}pair_match_accuracy']:.3f}\n")
                                 handle.write(f"- final_{summary_name}_candidate_mean_count: {last_metrics[f'{metric_prefix}candidate_mean_count']:.3f}\n")
                                 handle.write(f"- final_{summary_name}_target_file_recall: {last_metrics[f'{metric_prefix}target_file_recall_fraction']:.3f}\n")
+                        for noise_px in (0, 1, 2, 3, 4, 6, 7, 8):
+                            noise_prefix = f"reappeared_oracle_noise_file_slot_noise_{noise_px}px_"
+                            target_key = f"{noise_prefix}target_match_accuracy"
+                            if target_key in last_metrics:
+                                handle.write(f"- final_reappeared_oracle_noise_{noise_px}px_target_match_accuracy: {last_metrics[target_key]:.3f}\n")
+                                handle.write(f"- final_reappeared_oracle_noise_{noise_px}px_pair_match_accuracy: {last_metrics[f'{noise_prefix}pair_match_accuracy']:.3f}\n")
+                                handle.write(f"- final_reappeared_oracle_noise_{noise_px}px_assignment_position_error: {last_metrics[f'{noise_prefix}assignment_position_error']:.6f}\n")
                     if "active_file_expectation_pair" in last_metrics:
                         handle.write(f"- final_active_file_expectation_pair_loss: {last_metrics['active_file_expectation_pair']:.6f}\n")
                         handle.write(f"- final_active_file_expectation_hard_loss: {last_metrics['active_file_expectation_hard']:.6f}\n")
