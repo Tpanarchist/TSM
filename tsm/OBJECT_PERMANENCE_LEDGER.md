@@ -17,18 +17,19 @@ This ledger records the current experimental status of the temporal object-conti
 11. Context-aware learned candidate gating improves lookup without densifying Definitions: yes.
 12. Object files carry explicit phase/trajectory state: yes, scaffolded.
 13. Learned phase/trajectory dynamics predicts reappearance position better than naive velocity: yes.
-14. Predicted reappearance position is load-bearing for current binding: no.
-15. Binding representations preserve recoverable position: partial. Visible reappeared Definition/file-query binding features now preserve position; memory-conditioned source features remain weak.
-16. Object-file expectation predicts its own future Definition state: partial, still weak.
-17. Full exact object permanence: not yet.
+14. Predicted reappearance position is load-bearing for explicit candidate masking: no.
+15. Position channels are load-bearing inside feature-only binding: yes, under ablation control.
+16. Binding representations preserve recoverable position: partial. Visible reappeared Definition/file-query binding features now preserve position; memory-conditioned source features remain weak.
+17. Object-file expectation predicts its own future Definition state: partial, still weak.
+18. Full exact object permanence: not yet.
 
 ## Current Claim
 
-TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance, especially against hard same-class negatives. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. A learned active gate can recover part of that live set from Definition/file geometry and context without position input, but it is still weaker than the scaffold. Object files now carry scaffolded phase/trajectory state, and a learned dynamics head can predict reappearance position much better than the naive velocity projection. A position-aware binding interface exposes reappeared position in the visible Definition/file-query representations, but predicted-position candidate lookup still does not beat the feature-only candidate baseline. Full object permanence is still not solved because visible reappeared state does not bind cleanly back to the exact object file under global lookup.
+TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance, especially against hard same-class negatives. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. A learned active gate can recover part of that live set from Definition/file geometry and context without position input, but it is still weaker than the scaffold. Object files now carry scaffolded phase/trajectory state, and a learned dynamics head can predict reappearance position much better than the naive velocity projection. A position-aware binding interface exposes reappeared position in the visible Definition/file-query representations. Position ablation shows that feature-only binding is already using those coordinate channels, but explicit predicted-position masking still does not beat the full feature-only path. Full object permanence is still not solved because visible reappeared state does not bind cleanly back to the exact object file under global lookup.
 
 ## Next Target
 
-The next mechanism should use prediction-error competition rather than adding another expectation loss or similarity head. Each active object file should predict an expected reappearance state, the actual percept should arrive, and the file with the lowest local prediction error should own the reappearance. Position-aware features are now recoverable on the visible side, but similarity-based candidate lookup still fails to make predicted geometry load-bearing.
+The next mechanism should first stabilize and characterize the partial geometry-through-feature win before adding a heavier prediction-error competition path. If that re-baseline holds, each active object file should then predict an expected reappearance state, the actual percept should arrive, and the file with the lowest local prediction error should own the reappearance. Do not add another expectation loss or broad similarity head before that control is understood.
 
 ## Active Candidate-Gating Result
 
@@ -364,3 +365,35 @@ Latest held-out checkpoint:
 - ternary nonzero fraction: `0.257`
 
 This clears the recoverability part of the interface repair for visible reappeared Definition/file-query features, but not for memory-conditioned source features. It also triggers the next kill gate: once position is recoverable, predicted-position candidate matching still fails to beat the feature-only candidate baseline. A brief variant that pushed the appended coordinate representation directly through the active query loss made ternary dense and weakened the bridge, so that path was rejected. The next target is prediction-error binding, not stronger similarity pressure.
+
+## Position-Ablated Feature-Only Control
+
+Evaluated checkpoint: `runs/20260601_203942_temporal_objects_position_aware_binding`
+
+This control compares the feature-only candidate lookup with the full position-aware binding vector against the same lookup with the appended coordinate channels removed. The candidate mask is unchanged, so the only difference is whether the feature distance can see the binding-position channels.
+
+Best held-out checkpoint:
+
+- full feature-only exact / hard match: `0.235` / `0.319`
+- position-ablated feature-only exact / hard match: `0.078` / `0.240`
+- full Definition position improvement / R2: `+0.146` / `0.763`
+- ablated Definition position improvement / R2: `-0.084` / `-0.619`
+- full file-query position improvement / R2: `+0.151` / `0.779`
+- ablated file-query position improvement / R2: `-0.110` / `-0.892`
+- row coverage / target recall: `1.000` / `1.000` for both paths
+- occluded bridge: `+0.274`
+- ternary nonzero fraction: `0.235`
+
+Latest held-out checkpoint:
+
+- full feature-only exact / hard match: `0.235` / `0.458`
+- position-ablated feature-only exact / hard match: `0.156` / `0.385`
+- full Definition position improvement / R2: `+0.152` / `0.781`
+- ablated Definition position improvement / R2: `-0.077` / `-0.596`
+- full file-query position improvement / R2: `+0.157` / `0.803`
+- ablated file-query position improvement / R2: `-0.107` / `-0.895`
+- row coverage / target recall: `1.000` / `1.000` for both paths
+- occluded bridge: `+0.129`
+- ternary nonzero fraction: `0.257`
+
+This resolves the ambiguity in the prior feature-only column. The position-aware feature-only path is not a pure non-geometric baseline: it is already using the coordinate channels, and removing them weakens both exact and hard same-class matching. The explicit predicted-position mask still fails, but geometry is now load-bearing through feature distance. The next step is to re-baseline and stabilize this partial win before building prediction-error competition.

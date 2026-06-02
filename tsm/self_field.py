@@ -1687,6 +1687,30 @@ class Self(nn.Module):
                             ),
                         ))
                         diagnostics.update(_prefix_metrics(
+                            "reappeared_definition_position_ablated_",
+                            position_recoverability_diagnostics(
+                                target_definition_scores.to(image_t.dtype),
+                                target_position_for_reappeared,
+                                scale=float(max(1, self.cfg.image_size)),
+                            ),
+                        ))
+                        diagnostics.update(_prefix_metrics(
+                            "reappeared_file_query_position_ablated_",
+                            position_recoverability_diagnostics(
+                                target_query_scores.to(image_t.dtype),
+                                target_position_for_reappeared,
+                                scale=float(max(1, self.cfg.image_size)),
+                            ),
+                        ))
+                        diagnostics.update(_prefix_metrics(
+                            "reappeared_memory_definition_position_ablated_",
+                            position_recoverability_diagnostics(
+                                source_definition_scores.to(image_t.dtype),
+                                target_position_for_reappeared,
+                                scale=float(max(1, self.cfg.image_size)),
+                            ),
+                        ))
+                        diagnostics.update(_prefix_metrics(
                             "reappeared_file_query_",
                             position_recoverability_diagnostics(
                                 target_query_binding_scores.to(image_t.dtype),
@@ -1841,6 +1865,23 @@ class Self(nn.Module):
                                 ))
                                 diagnostics.update(_prefix_metrics(
                                     prefix,
+                                    _candidate_path_context_metrics(diagnostics, image_t),
+                                ))
+                            if feature_only_candidates is not None:
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_feature_only_position_ablated_query_file_",
+                                    candidate_instance_match_diagnostics(
+                                        target_query_scores.to(image_t.dtype),
+                                        target_object_file_scores.to(image_t.dtype),
+                                        source_sequences,
+                                        source_sequences,
+                                        source_labels,
+                                        source_labels,
+                                        feature_only_candidates,
+                                    ),
+                                ))
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_feature_only_position_ablated_query_file_",
                                     _candidate_path_context_metrics(diagnostics, image_t),
                                 ))
                             with torch.no_grad():
