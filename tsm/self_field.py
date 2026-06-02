@@ -1353,6 +1353,145 @@ def _all_track_endpoint_spacing_metrics(
     }
 
 
+def _all_track_endpoint_slot_cleanliness_metrics(
+    predicted_positions: torch.Tensor,
+    predicted_valid: torch.Tensor,
+    file_instance_labels: torch.Tensor,
+    slot_positions: torch.Tensor,
+    slot_valid: torch.Tensor,
+    all_positions: torch.Tensor,
+    all_instance_labels: torch.Tensor,
+    cfg: TsmConfig,
+) -> dict[str, torch.Tensor]:
+    dtype = predicted_positions.dtype if predicted_positions.is_floating_point() else torch.float32
+    device = predicted_positions.device
+    zero = torch.zeros((), dtype=dtype, device=device)
+    empty = {
+        "object_count": zero,
+        "valid_object_fraction": zero,
+        "slot_clean_object_fraction": zero,
+        "slot_dirty_object_fraction": zero,
+        "slot_error_mean": zero,
+        "slot_error_p90": zero,
+        "endpoint_error_mean": zero,
+        "endpoint_error_p90": zero,
+        "clean_endpoint_error_mean": zero,
+        "clean_endpoint_error_p90": zero,
+        "dirty_endpoint_error_mean": zero,
+        "dirty_endpoint_error_p90": zero,
+        "high_error_object_fraction": zero,
+        "high_error_clean_fraction": zero,
+    }
+    if (
+        predicted_positions.numel() == 0
+        or predicted_valid.numel() == 0
+        or file_instance_labels.numel() == 0
+        or slot_positions.numel() == 0
+        or slot_valid.numel() == 0
+        or all_positions.numel() == 0
+        or all_instance_labels.numel() == 0
+    ):
+        return empty
+
+    file_count = min(predicted_positions.shape[0], predicted_valid.shape[0], file_instance_labels.shape[0])
+    query_count = min(slot_positions.shape[0], slot_valid.shape[0], all_positions.shape[0], all_instance_labels.shape[0])
+    object_count = all_instance_labels.shape[1] if all_instance_labels.dim() >= 2 else 0
+    if file_count == 0 or query_count == 0 or object_count <= 0:
+        out = dict(empty)
+        out["object_count"] = torch.tensor(float(object_count), dtype=dtype, device=device)
+        return out
+
+    predicted_positions = predicted_positions[:file_count].to(device=device, dtype=dtype)
+    predicted_valid = predicted_valid[:file_count].to(device=device, dtype=torch.bool)
+    file_instance_labels = file_instance_labels[:file_count].to(device=device, dtype=torch.long)
+    slot_positions = slot_positions[:query_count].to(device=device, dtype=dtype)
+    slot_valid = slot_valid[:query_count].to(device=device, dtype=torch.bool)
+    all_positions = all_positions[:query_count].to(device=device, dtype=dtype)
+    all_instance_labels = all_instance_labels[:query_count].to(device=device, dtype=torch.long)
+
+    scale = float(max(1, cfg.image_size))
+    clean_threshold = float(cfg.object_slot_match_radius) / scale
+    endpoint_errors: list[torch.Tensor] = []
+    slot_errors: list[torch.Tensor] = []
+    clean_endpoint_errors: list[torch.Tensor] = []
+    dirty_endpoint_errors: list[torch.Tensor] = []
+    clean_flags: list[torch.Tensor] = []
+    high_error_flags: list[torch.Tensor] = []
+    high_error_clean_flags: list[torch.Tensor] = []
+
+    for row in range(query_count):
+        valid_slots = torch.nonzero(slot_valid[row], as_tuple=False).flatten()
+        if valid_slots.numel() == 0:
+            continue
+        true_positions = all_positions[row, :object_count]
+        pairwise = torch.cdist(true_positions.unsqueeze(0), true_positions.unsqueeze(0)).squeeze(0) / scale
+        if object_count > 1:
+            eye = torch.eye(object_count, dtype=torch.bool, device=device)
+            pair_values = pairwise.masked_select(~eye)
+            row_spacing = pair_values.min() if pair_values.numel() > 0 else torch.tensor(float("inf"), dtype=dtype, device=device)
+        else:
+            row_spacing = torch.tensor(float("inf"), dtype=dtype, device=device)
+
+        row_slot_positions = slot_positions[row, valid_slots]
+        slot_distances = torch.cdist(true_positions, row_slot_positions) / scale
+        nearest_slot_error = slot_distances.min(dim=1).values
+        for object_idx in range(object_count):
+            label = all_instance_labels[row, object_idx]
+            matches = torch.nonzero(file_instance_labels == label, as_tuple=False).flatten()
+            if matches.numel() == 0:
+                continue
+            file_idx = matches[0]
+            if not bool(predicted_valid[file_idx].item()):
+                continue
+            endpoint_error = (predicted_positions[file_idx] - true_positions[object_idx]).norm() / scale
+            slot_error = nearest_slot_error[object_idx]
+            slot_clean = slot_error <= clean_threshold
+            high_error = endpoint_error > row_spacing
+
+            endpoint_errors.append(endpoint_error)
+            slot_errors.append(slot_error)
+            clean_flags.append(slot_clean.to(dtype))
+            high_error_flags.append(high_error.to(dtype))
+            if bool(slot_clean.item()):
+                clean_endpoint_errors.append(endpoint_error)
+            else:
+                dirty_endpoint_errors.append(endpoint_error)
+            if bool(high_error.item()):
+                high_error_clean_flags.append(slot_clean.to(dtype))
+
+    if not endpoint_errors:
+        out = dict(empty)
+        out["object_count"] = torch.tensor(float(object_count), dtype=dtype, device=device)
+        return out
+
+    endpoint_tensor = torch.stack(endpoint_errors)
+    slot_tensor = torch.stack(slot_errors)
+    clean_tensor = torch.stack(clean_flags)
+    high_tensor = torch.stack(high_error_flags)
+    clean_endpoint_tensor = torch.stack(clean_endpoint_errors) if clean_endpoint_errors else torch.empty(0, dtype=dtype, device=device)
+    dirty_endpoint_tensor = torch.stack(dirty_endpoint_errors) if dirty_endpoint_errors else torch.empty(0, dtype=dtype, device=device)
+    high_clean_tensor = (
+        torch.stack(high_error_clean_flags) if high_error_clean_flags else torch.empty(0, dtype=dtype, device=device)
+    )
+    expected_objects = float(max(1, query_count * object_count))
+    return {
+        "object_count": torch.tensor(float(object_count), dtype=dtype, device=device),
+        "valid_object_fraction": torch.tensor(float(endpoint_tensor.numel()) / expected_objects, dtype=dtype, device=device),
+        "slot_clean_object_fraction": clean_tensor.mean(),
+        "slot_dirty_object_fraction": 1.0 - clean_tensor.mean(),
+        "slot_error_mean": slot_tensor.mean(),
+        "slot_error_p90": _quantile_or_zero(slot_tensor, 0.90, zero),
+        "endpoint_error_mean": endpoint_tensor.mean(),
+        "endpoint_error_p90": _quantile_or_zero(endpoint_tensor, 0.90, zero),
+        "clean_endpoint_error_mean": clean_endpoint_tensor.mean() if clean_endpoint_tensor.numel() > 0 else zero,
+        "clean_endpoint_error_p90": _quantile_or_zero(clean_endpoint_tensor, 0.90, zero),
+        "dirty_endpoint_error_mean": dirty_endpoint_tensor.mean() if dirty_endpoint_tensor.numel() > 0 else zero,
+        "dirty_endpoint_error_p90": _quantile_or_zero(dirty_endpoint_tensor, 0.90, zero),
+        "high_error_object_fraction": high_tensor.mean(),
+        "high_error_clean_fraction": high_clean_tensor.mean() if high_clean_tensor.numel() > 0 else zero,
+    }
+
+
 def _oracle_pair_file_slot_ceiling_metrics(
     slot_positions: torch.Tensor,
     slot_valid: torch.Tensor,
@@ -3485,6 +3624,19 @@ class Self(nn.Module):
                                         self.cfg,
                                     ),
                                 ))
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_dynamics_slot_clean_endpoint_",
+                                    _all_track_endpoint_slot_cleanliness_metrics(
+                                        dynamics_position.detach().to(image_t.dtype),
+                                        file_slot_valid,
+                                        source_sequences,
+                                        slot_output.position.to(image_t.dtype),
+                                        slot_output.valid,
+                                        all_positions_for_reappeared,
+                                        all_file_ids_for_reappeared,
+                                        self.cfg,
+                                    ),
+                                ))
                             diagnostics.update(_prefix_metrics(
                                 "reappeared_oracle_position_global_file_slot_",
                                 _file_slot_assignment_metrics(
@@ -3646,6 +3798,19 @@ class Self(nn.Module):
                                             ballistic_position.detach().to(image_t.dtype),
                                             ballistic_file_slot_valid,
                                             source_sequences,
+                                            all_positions_for_reappeared,
+                                            all_file_ids_for_reappeared,
+                                            self.cfg,
+                                        ),
+                                    ))
+                                    diagnostics.update(_prefix_metrics(
+                                        "reappeared_ballistic_slot_clean_endpoint_",
+                                        _all_track_endpoint_slot_cleanliness_metrics(
+                                            ballistic_position.detach().to(image_t.dtype),
+                                            ballistic_file_slot_valid,
+                                            source_sequences,
+                                            slot_output.position.to(image_t.dtype),
+                                            slot_output.valid,
                                             all_positions_for_reappeared,
                                             all_file_ids_for_reappeared,
                                             self.cfg,

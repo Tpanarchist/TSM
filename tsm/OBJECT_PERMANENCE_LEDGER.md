@@ -840,3 +840,63 @@ Current fork:
 - If the frame is kept at `28x28`, the next target is endpoint precision / load robustness for four same-class tracks.
 - If the goal is to test candidate-count logic independently of density, add a wider-frame or wider-spacing four-object variant first.
 - Global `0.000` is now plausibly the far end of this same density/candidate-count curve, not necessarily a separate failure mode.
+
+## Wide Four-Object Curved Control
+
+Config added: `configs/temporal_objects_contested_curved_4_wide.yaml`
+
+Dataset added: `temporal_objects_contested_curved_4_wide`
+
+Diagnostic added: all-track endpoint errors split by slot cleanliness:
+
+- slot-clean object fraction.
+- slot-dirty object fraction.
+- clean-slot endpoint error mean / p90.
+- dirty-slot endpoint error mean / p90.
+- high-error object fraction.
+- high-error clean fraction.
+
+Pre-registered fork:
+
+- If wider spacing recovers learned four-object binding, the previous failure was mostly arena density / spacing budget.
+- If wider spacing does not recover binding while slots are clean, the failure is load-induced trajectory degradation in the file/dynamics path.
+- If wider spacing corrupts slots, the control is confounded and the slot geometry must be repaired before interpreting binding.
+
+Calibration note:
+
+An initial wide run with `object_slot_nms_radius: 5.0` was confounded: visible slots duplicated around objects and slot recoverability dropped. Direct slot auditing showed that `6.0` restores distinct object-local slots for the `40x40` stream. The diagnostic result below uses the repaired `6.0` NMS radius.
+
+Run: `runs/20260602_135616_temporal_objects_contested_curved_4_wide`
+
+Config: `configs/temporal_objects_contested_curved_4_wide.yaml`
+
+Held-out/test summary:
+
+| condition | min spacing px | learned mean | learned median | learned p90 | learned p90 / spacing | ballistic mean | ballistic p90 | slot err | slot R2 | slot clean | oracle all-set | ballistic all-set | learned all-set | learned object |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 4-object 28px | 8.623 | 0.207 | 0.191 | 0.388 | 1.259 | 0.432 | 0.668 | 0.016 | 0.999 | n/a | 1.000 | 0.000 | 0.258 | 0.629 |
+| 4-object wide 40px | 13.831 | 0.263 | 0.248 | 0.406 | 1.174 | 0.485 | 0.721 | 0.015 | 0.9999 | 1.000 | 1.000 | 0.000 | 0.167 | 0.500 |
+
+Slot-clean endpoint split for the corrected wide run:
+
+- slot clean object fraction: `1.000`
+- slot dirty object fraction: `0.000`
+- slot error mean / p90: `0.0146` / `0.0181`
+- clean-slot endpoint mean / p90: `0.263` / `0.406`
+- dirty-slot endpoint mean / p90: `0.000` / `0.000`
+- high-error object fraction: `0.250`
+- high-error clean fraction: `1.000`
+
+Interpretation:
+
+Wider spacing did not recover four-object learned binding. The control is clean: slot localization is strong, slot collapse is `0.000`, oracle all-set assignment remains `1.000`, and all high endpoint-error cases occur on clean slots. That rules out arena spacing alone and slot contamination for the corrected wide condition.
+
+The four-object wall is now better described as load-induced trajectory degradation under four same-class tracks. The learned dynamics endpoint stays better than ballistic, but its p90 error remains above the spacing budget even after the arena is widened, and full local set binding remains low.
+
+Current claim:
+
+TSM has validated curved local contested binding for two and three same-class objects. Four-object binding fails because the per-object dynamics/file trajectory state degrades under load, not because the slot layer or assignment logic cannot represent the scene.
+
+Next target:
+
+Clean the slot-to-file trajectory pipeline under four-object load. Do not add broader cognition, governance, or appearance/context routing until the dynamics state can keep four clean object trajectories separated.

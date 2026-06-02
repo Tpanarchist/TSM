@@ -539,6 +539,7 @@ class ContestedTemporalObjectPermanenceDataset(Dataset):
         split: str = "train",
         motion: str = "linear",
         track_count: int = 2,
+        dataset_name: str | None = None,
     ) -> None:
         if motion not in {"linear", "curved"}:
             raise ValueError(f"unsupported contested motion: {motion}")
@@ -550,11 +551,12 @@ class ContestedTemporalObjectPermanenceDataset(Dataset):
         self.split = split
         self.motion = motion
         self.track_count = track_count
-        self.dataset_name = (
+        default_name = (
             f"temporal_objects_contested_curved_{track_count}"
             if motion == "curved" and track_count != 2
             else ("temporal_objects_contested_curved" if motion == "curved" else "temporal_objects_contested_position")
         )
+        self.dataset_name = dataset_name or default_name
         self.dataset_id = _dataset_id(self.dataset_name)
 
     def __len__(self) -> int:
@@ -712,6 +714,7 @@ def make_dataset(data_cfg: DatasetConfig, model_cfg: TsmConfig) -> Dataset:
         "temporal_objects_contested_curved_2",
         "temporal_objects_contested_curved_3",
         "temporal_objects_contested_curved_4",
+        "temporal_objects_contested_curved_4_wide",
         "temporal_objects_contested_nonlinear",
         "object_permanence_contested",
     }:
@@ -721,12 +724,13 @@ def make_dataset(data_cfg: DatasetConfig, model_cfg: TsmConfig) -> Dataset:
             "temporal_objects_contested_curved_2",
             "temporal_objects_contested_curved_3",
             "temporal_objects_contested_curved_4",
+            "temporal_objects_contested_curved_4_wide",
             "temporal_objects_contested_nonlinear",
         } else "linear"
         track_count = 2
         if data_cfg.name.endswith("_3"):
             track_count = 3
-        elif data_cfg.name.endswith("_4"):
+        elif data_cfg.name.endswith("_4") or data_cfg.name.endswith("_4_wide"):
             track_count = 4
         return ContestedTemporalObjectPermanenceDataset(
             model_cfg,
@@ -735,6 +739,7 @@ def make_dataset(data_cfg: DatasetConfig, model_cfg: TsmConfig) -> Dataset:
             split=split,
             motion=motion,
             track_count=track_count,
+            dataset_name=data_cfg.name if data_cfg.name == "temporal_objects_contested_curved_4_wide" else None,
         )
     Path(data_cfg.cache_dir).mkdir(parents=True, exist_ok=True)
     return ImageStreamDataset(data_cfg, model_cfg)

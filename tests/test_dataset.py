@@ -172,6 +172,30 @@ def test_contested_curved_dataset_supports_three_and_four_tracks():
         assert torch.unique(item["all_object_file_ids"]).numel() == track_count
 
 
+def test_contested_curved_wide_four_track_spacing_control():
+    narrow = TsmConfig(d_model=16, image_size=28, image_channels=1)
+    wide = TsmConfig(d_model=16, image_size=40, image_channels=1)
+    narrow_distances = []
+    wide_distances = []
+    for scene_id in range(16):
+        narrow_positions = torch.tensor(
+            [_contested_curved_position(narrow, scene_id, track_id, 0, "test", 4) for track_id in range(4)],
+            dtype=torch.float32,
+        )
+        wide_positions = torch.tensor(
+            [_contested_curved_position(wide, scene_id, track_id, 0, "test", 4) for track_id in range(4)],
+            dtype=torch.float32,
+        )
+        narrow_pairwise = torch.cdist(narrow_positions.unsqueeze(0), narrow_positions.unsqueeze(0)).squeeze(0)
+        wide_pairwise = torch.cdist(wide_positions.unsqueeze(0), wide_positions.unsqueeze(0)).squeeze(0)
+        eye = torch.eye(4, dtype=torch.bool)
+        narrow_distances.append(narrow_pairwise.masked_select(~eye).min())
+        wide_distances.append(wide_pairwise.masked_select(~eye).min())
+
+    assert torch.stack(wide_distances).mean().item() > torch.stack(narrow_distances).mean().item() + 4.0
+    assert torch.stack(wide_distances).min().item() > 12.0
+
+
 def test_make_dataset_supports_temporal_object_alias():
     cfg = TsmConfig(d_model=16, image_size=28, image_channels=1)
     ds = make_dataset(DatasetConfig(name="object_permanence", split="train", limit=7, seed=3), cfg)
@@ -208,9 +232,11 @@ def test_make_dataset_supports_contested_curved_count_aliases():
     for name, track_count in (
         ("temporal_objects_contested_curved_3", 3),
         ("temporal_objects_contested_curved_4", 4),
+        ("temporal_objects_contested_curved_4_wide", 4),
     ):
         ds = make_dataset(DatasetConfig(name=name, split="train", limit=7, seed=3), cfg)
 
         assert isinstance(ds, ContestedTemporalObjectPermanenceDataset)
         assert ds.motion == "curved"
         assert ds.track_count == track_count
+        assert ds.dataset_name == name

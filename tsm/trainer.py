@@ -350,6 +350,21 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                             handle.write(f"- final_{summary_name}_endpoint_error_p90: {last_metrics[f'{metric_prefix}endpoint_error_p90']:.6f}\n")
                             handle.write(f"- final_{summary_name}_endpoint_error_to_spacing_ratio: {last_metrics[f'{metric_prefix}endpoint_error_to_spacing_ratio']:.3f}\n")
                             handle.write(f"- final_{summary_name}_endpoint_p90_to_spacing_ratio: {last_metrics[f'{metric_prefix}endpoint_p90_to_spacing_ratio']:.3f}\n")
+                    for summary_name, metric_prefix in (
+                        ("reappeared_dynamics_slot_clean_endpoint", "reappeared_dynamics_slot_clean_endpoint_"),
+                        ("reappeared_ballistic_slot_clean_endpoint", "reappeared_ballistic_slot_clean_endpoint_"),
+                    ):
+                        if f"{metric_prefix}slot_clean_object_fraction" in last_metrics:
+                            handle.write(f"- final_{summary_name}_slot_clean_object_fraction: {last_metrics[f'{metric_prefix}slot_clean_object_fraction']:.3f}\n")
+                            handle.write(f"- final_{summary_name}_slot_dirty_object_fraction: {last_metrics[f'{metric_prefix}slot_dirty_object_fraction']:.3f}\n")
+                            handle.write(f"- final_{summary_name}_slot_error_mean: {last_metrics[f'{metric_prefix}slot_error_mean']:.6f}\n")
+                            handle.write(f"- final_{summary_name}_slot_error_p90: {last_metrics[f'{metric_prefix}slot_error_p90']:.6f}\n")
+                            handle.write(f"- final_{summary_name}_clean_endpoint_error_mean: {last_metrics[f'{metric_prefix}clean_endpoint_error_mean']:.6f}\n")
+                            handle.write(f"- final_{summary_name}_clean_endpoint_error_p90: {last_metrics[f'{metric_prefix}clean_endpoint_error_p90']:.6f}\n")
+                            handle.write(f"- final_{summary_name}_dirty_endpoint_error_mean: {last_metrics[f'{metric_prefix}dirty_endpoint_error_mean']:.6f}\n")
+                            handle.write(f"- final_{summary_name}_dirty_endpoint_error_p90: {last_metrics[f'{metric_prefix}dirty_endpoint_error_p90']:.6f}\n")
+                            handle.write(f"- final_{summary_name}_high_error_object_fraction: {last_metrics[f'{metric_prefix}high_error_object_fraction']:.3f}\n")
+                            handle.write(f"- final_{summary_name}_high_error_clean_fraction: {last_metrics[f'{metric_prefix}high_error_clean_fraction']:.3f}\n")
                     if "reappeared_definition_position_linear_error" in last_metrics:
                         handle.write(f"- final_reappeared_definition_position_linear_error: {last_metrics['reappeared_definition_position_linear_error']:.6f}\n")
                         handle.write(f"- final_reappeared_definition_position_linear_improvement: {last_metrics['reappeared_definition_position_linear_improvement']:.6f}\n")
