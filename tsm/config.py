@@ -20,6 +20,10 @@ class TsmConfig:
     attention_heads: int = 4
     inference_steps: int = 2
     dropout: float = 0.0
+    use_patch_position_features: bool = False
+    patch_position_scale: float = 0.1
+    use_position_aware_definition_read: bool = False
+    definition_position_feature_scale: float = 0.0
     apathy_floor: float = 0.02
     recon_weight: float = 1.0
     pred_weight: float = 1.0

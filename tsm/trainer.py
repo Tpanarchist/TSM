@@ -80,7 +80,7 @@ def save_checkpoint(path: Path, model: Self, optimizer: torch.optim.Optimizer | 
 
 def _load_model_state(model: Self, state: dict[str, torch.Tensor]) -> None:
     result = model.load_state_dict(state, strict=False)
-    allowed_missing = {"defs.file_query.weight"}
+    allowed_missing = {"defs.file_query.weight", "defs.position_read_logits"}
     allowed_missing_prefixes = ("active_file_gate.", "active_file_expectation.", "active_file_dynamics.")
     missing = set(result.missing_keys)
     unexpected = set(result.unexpected_keys)

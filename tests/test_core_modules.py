@@ -107,3 +107,26 @@ def test_definition_bank_can_project_memory_trace():
     assert memory_raw.shape == conditioned.shape
     assert memory_raw[0, 0].item() > 0.0
     assert torch.allclose(query_raw, memory_raw)
+
+
+def test_definition_bank_position_aware_read_can_select_token():
+    cfg = TsmConfig(
+        d_model=2,
+        workspace_latents=2,
+        contexts=1,
+        definitions_per_context=1,
+        attention_heads=1,
+        use_position_aware_definition_read=True,
+    )
+    bank = DefinitionBank(cfg)
+    with torch.no_grad():
+        bank.axes.zero_()
+        bank.axes[0, 0, 0] = 1.0
+        bank.position_read_logits[0, 0] = torch.tensor([-8.0, 8.0])
+    eps = torch.tensor([[[1.0, 0.0], [3.0, 0.0]]])
+    ctx = torch.ones(1, 1)
+
+    raw = bank.raw_scores(eps, ctx)
+
+    assert raw.shape == (1, 1)
+    assert raw[0, 0].item() > 2.9

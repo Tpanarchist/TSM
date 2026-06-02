@@ -51,6 +51,8 @@ class PerceptionMeta:
     source_confidence: torch.Tensor
     time_tag: torch.Tensor
     dataset_id: torch.Tensor | None = None
+    position: torch.Tensor | None = None
+    binding_position: torch.Tensor | None = None
 
 
 @dataclass

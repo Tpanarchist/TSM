@@ -98,6 +98,27 @@ def _zero_like_scalar(reference: torch.Tensor) -> torch.Tensor:
     return torch.zeros((), dtype=reference.dtype, device=reference.device)
 
 
+def _normalized_pixel_position(position: torch.Tensor, cfg: TsmConfig) -> torch.Tensor:
+    return position / float(max(1, cfg.image_size))
+
+
+def _binding_position_features(
+    features: torch.Tensor,
+    normalized_position: torch.Tensor | None,
+    cfg: TsmConfig,
+) -> torch.Tensor:
+    scale = float(cfg.definition_position_feature_scale)
+    if scale <= 0.0 or normalized_position is None or features.numel() == 0:
+        return features
+    count = min(features.shape[0], normalized_position.shape[0])
+    if count == 0:
+        return features
+    position = normalized_position[:count].to(device=features.device, dtype=features.dtype)
+    if features.shape[0] != count:
+        features = features[:count]
+    return torch.cat([features, scale * position], dim=-1)
+
+
 def _paired_contrastive_loss(
     source: torch.Tensor,
     target: torch.Tensor,
@@ -635,13 +656,14 @@ class Self(nn.Module):
             drives,
             context.probs,
         )
-        return self.defs.project(sae.eps, context.probs)
+        return self.defs.project(sae.eps, context.probs, token_position=perception.meta.position)
 
     def _definition_state_for_image(
         self,
         image: torch.Tensor,
         dataset_id: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        include_binding_position: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         perception = self.perception(image, dataset_id=dataset_id)
         batch_size = image.shape[0]
         initial_q = self.mind.initial(batch_size, image.device)
@@ -672,7 +694,10 @@ class Self(nn.Module):
             drives,
             context.probs,
         )
-        return self.defs.raw_scores(sae.eps, context.probs), context.probs
+        scores = self.defs.raw_scores(sae.eps, context.probs, token_position=perception.meta.position)
+        if include_binding_position:
+            return scores, context.probs, perception.meta.binding_position
+        return scores, context.probs
 
     def _definition_scores_for_image(
         self,
@@ -695,8 +720,9 @@ class Self(nn.Module):
         self,
         image: torch.Tensor,
         dataset_id: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        return self._definition_state_for_image(image, dataset_id)
+        include_binding_position: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        return self._definition_state_for_image(image, dataset_id, include_binding_position)
 
     def forward_train(self, batch: dict[str, torch.Tensor], include_label_diagnostics: bool = True) -> TrainOutput:
         image_t = batch["image_t"]
@@ -747,8 +773,14 @@ class Self(nn.Module):
         if not self.cfg.use_memory_conditioning:
             memory_prediction_confidence = torch.zeros_like(memory_prediction_confidence)
         memory_definition_confidence = memory_prediction_confidence if self.cfg.use_ternary_conditioning else torch.zeros_like(memory_prediction_confidence)
-        ternary_base = self.defs.project(sae.eps, context.probs)
-        ternary = self.defs.project(sae.eps, context.probs, memory_feature, memory_definition_confidence)
+        ternary_base = self.defs.project(sae.eps, context.probs, token_position=perception.meta.position)
+        ternary = self.defs.project(
+            sae.eps,
+            context.probs,
+            memory_feature,
+            memory_definition_confidence,
+            token_position=perception.meta.position,
+        )
         ternary_condition = ternary if self.cfg.use_ternary_conditioning else None
         ternary_base_condition = ternary_base if self.cfg.use_ternary_conditioning else None
         recon = self.reality.reconstruct_image(q, ternary_condition)
@@ -788,10 +820,12 @@ class Self(nn.Module):
                     context.probs,
                     memory_feature,
                     memory_definition_confidence,
+                    token_position=perception.meta.position,
                 )
-                target_scores, target_context_probs = self._definition_state_for_image(
+                target_scores, target_context_probs, target_binding_position = self._definition_state_for_image(
                     image_tp1[reappeared_for_alignment],
                     dataset_id=target_dataset_id,
+                    include_binding_position=True,
                 )
                 source_reappeared_scores = source_scores[reappeared_for_alignment]
                 if self.cfg.reappearance_alignment_weight > 0.0:
@@ -1398,15 +1432,21 @@ class Self(nn.Module):
                         image_tp1[reappeared_active],
                         dataset_id=target_dataset_id,
                     )
-                    target_definition_scores, target_context_probs = self._diagnostic_definition_state_for_image(
+                    (
+                        target_definition_scores,
+                        target_context_probs,
+                        target_binding_position,
+                    ) = self._diagnostic_definition_state_for_image(
                         image_tp1[reappeared_active],
                         dataset_id=target_dataset_id,
+                        include_binding_position=True,
                     )
                     source_definition_scores = self.defs.raw_scores(
                         sae.eps,
                         context.probs,
                         memory_feature,
                         memory_definition_confidence,
+                        token_position=perception.meta.position,
                     )[reappeared_active]
                     object_file_scores = self.defs.memory_scores(
                         memory_feature[reappeared_active],
@@ -1607,6 +1647,31 @@ class Self(nn.Module):
                             diagnostics["reappeared_dynamics_position_error"] = dynamics_error
                             diagnostics["reappeared_dynamics_position_improvement"] = dynamics_improvement
                             diagnostics["reappeared_dynamics_valid_fraction"] = dynamics_valid.to(image_t.dtype).mean()
+                    file_binding_position = (
+                        dynamics_position.detach()
+                        if dynamics_position is not None
+                        else memory_read.position[reappeared_active]
+                    )
+                    target_definition_binding_scores = _binding_position_features(
+                        target_definition_scores,
+                        target_binding_position,
+                        self.cfg,
+                    )
+                    target_query_binding_scores = _binding_position_features(
+                        target_query_scores,
+                        target_binding_position,
+                        self.cfg,
+                    )
+                    source_definition_binding_scores = _binding_position_features(
+                        source_definition_scores,
+                        _normalized_pixel_position(file_binding_position, self.cfg),
+                        self.cfg,
+                    )
+                    target_object_file_binding_scores = _binding_position_features(
+                        target_object_file_scores,
+                        _normalized_pixel_position(file_binding_position, self.cfg),
+                        self.cfg,
+                    )
                     target_position_for_reappeared = None
                     if "object_position_tp1" in batch:
                         target_position_for_reappeared = batch["object_position_tp1"].to(
@@ -1616,7 +1681,7 @@ class Self(nn.Module):
                         diagnostics.update(_prefix_metrics(
                             "reappeared_definition_",
                             position_recoverability_diagnostics(
-                                target_definition_scores.to(image_t.dtype),
+                                target_definition_binding_scores.to(image_t.dtype),
                                 target_position_for_reappeared,
                                 scale=float(max(1, self.cfg.image_size)),
                             ),
@@ -1624,7 +1689,7 @@ class Self(nn.Module):
                         diagnostics.update(_prefix_metrics(
                             "reappeared_file_query_",
                             position_recoverability_diagnostics(
-                                target_query_scores.to(image_t.dtype),
+                                target_query_binding_scores.to(image_t.dtype),
                                 target_position_for_reappeared,
                                 scale=float(max(1, self.cfg.image_size)),
                             ),
@@ -1632,7 +1697,7 @@ class Self(nn.Module):
                         diagnostics.update(_prefix_metrics(
                             "reappeared_memory_definition_",
                             position_recoverability_diagnostics(
-                                source_definition_scores.to(image_t.dtype),
+                                source_definition_binding_scores.to(image_t.dtype),
                                 target_position_for_reappeared,
                                 scale=float(max(1, self.cfg.image_size)),
                             ),
@@ -1765,8 +1830,8 @@ class Self(nn.Module):
                                 diagnostics.update(_prefix_metrics(
                                     prefix,
                                     candidate_instance_match_diagnostics(
-                                        target_query_scores.to(image_t.dtype),
-                                        target_object_file_scores.to(image_t.dtype),
+                                        target_query_binding_scores.to(image_t.dtype),
+                                        target_object_file_binding_scores.to(image_t.dtype),
                                         source_sequences,
                                         source_sequences,
                                         source_labels,

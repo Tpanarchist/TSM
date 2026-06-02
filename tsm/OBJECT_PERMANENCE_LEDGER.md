@@ -18,17 +18,17 @@ This ledger records the current experimental status of the temporal object-conti
 12. Object files carry explicit phase/trajectory state: yes, scaffolded.
 13. Learned phase/trajectory dynamics predicts reappearance position better than naive velocity: yes.
 14. Predicted reappearance position is load-bearing for current binding: no.
-15. Binding representations preserve recoverable position: no, under current linear probe.
+15. Binding representations preserve recoverable position: partial. Visible reappeared Definition/file-query binding features now preserve position; memory-conditioned source features remain weak.
 16. Object-file expectation predicts its own future Definition state: partial, still weak.
 17. Full exact object permanence: not yet.
 
 ## Current Claim
 
-TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance, especially against hard same-class negatives. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. A learned active gate can recover part of that live set from Definition/file geometry and context without position input, but it is still weaker than the scaffold. Object files now carry scaffolded phase/trajectory state, and a learned dynamics head can predict reappearance position much better than the naive velocity projection. Probe 1 shows that this position-level win is stranded: predicted-position candidate lookup trails both the oracle-position lookup and the feature-only/no-position baseline, and position is not linearly recoverable from the current binding representations. Full object permanence is still not solved because visible reappeared state does not bind cleanly back to the exact object file under global lookup.
+TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance, especially against hard same-class negatives. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. A learned active gate can recover part of that live set from Definition/file geometry and context without position input, but it is still weaker than the scaffold. Object files now carry scaffolded phase/trajectory state, and a learned dynamics head can predict reappearance position much better than the naive velocity projection. A position-aware binding interface exposes reappeared position in the visible Definition/file-query representations, but predicted-position candidate lookup still does not beat the feature-only candidate baseline. Full object permanence is still not solved because visible reappeared state does not bind cleanly back to the exact object file under global lookup.
 
 ## Next Target
 
-The next mechanism should repair the binding representation/interface rather than adding another expectation loss. A reappearing visible state should eventually compete through local prediction error or a position-aware/slot-aware representation that preserves geometry, instead of relying on mean-pooled Definition/raw-score similarity to recover the correct file.
+The next mechanism should use prediction-error competition rather than adding another expectation loss or similarity head. Each active object file should predict an expected reappearance state, the actual percept should arrive, and the file with the lowest local prediction error should own the reappearance. Position-aware features are now recoverable on the visible side, but similarity-based candidate lookup still fails to make predicted geometry load-bearing.
 
 ## Active Candidate-Gating Result
 
@@ -330,3 +330,37 @@ Latest held-out checkpoint:
 - memory-conditioned Definition position linear improvement: `-0.326`
 
 This triggers the Probe 1 kill condition. The learned dynamics head predicts position well, but using that predicted position as the candidate key performs worse than the feature-only/no-position baseline and far worse than the oracle-position candidate set. The position-recoverability diagnostic is also negative: the current pooled Definition/raw-score, file-query, and memory-conditioned Definition representations do not linearly recover reappearance position better than a centroid baseline. The next target is representation/interface repair: position-aware or slot-aware binding, or a local prediction-error competition where object files own reappearance by lowest prediction error against the percept.
+
+## Position-Aware Binding Representation Result
+
+Run: `runs/20260601_203942_temporal_objects_position_aware_binding`
+
+Config: `configs/temporal_objects_position_aware_binding.yaml`
+
+This patch adds a narrow position-aware binding representation without adding new losses or expectation heads. Visible reappearance features append a salience-derived percept position. File-side binding features append the learned predicted reappearance position when available. The raw DefinitionBank no longer injects coordinates into ternary axes, so geometry is exposed to binding diagnostics without turning Definitions into a coordinate bus.
+
+Best held-out checkpoint:
+
+- Definition position linear improvement / R2: `+0.146` / `0.763`
+- file-query position linear improvement / R2: `+0.151` / `0.779`
+- memory-conditioned Definition position linear improvement / R2: `-0.011` / `0.062`
+- dynamics position error / improvement: `0.144` / `+0.220`
+- oracle-position exact / hard match: `0.391` / `0.368`
+- predicted-position exact / hard match: `0.235` / `0.317`
+- feature-only exact / hard match: `0.235` / `0.319`
+- occluded bridge: `+0.274`
+- ternary nonzero fraction: `0.235`
+
+Latest held-out checkpoint:
+
+- Definition position linear improvement / R2: `+0.152` / `0.781`
+- file-query position linear improvement / R2: `+0.157` / `0.803`
+- memory-conditioned Definition position linear improvement / R2: `-0.012` / `0.057`
+- dynamics position error / improvement: `0.137` / `+0.227`
+- oracle-position exact / hard match: `0.391` / `0.463`
+- predicted-position exact / hard match: `0.235` / `0.317`
+- feature-only exact / hard match: `0.235` / `0.458`
+- occluded bridge: `+0.129`
+- ternary nonzero fraction: `0.257`
+
+This clears the recoverability part of the interface repair for visible reappeared Definition/file-query features, but not for memory-conditioned source features. It also triggers the next kill gate: once position is recoverable, predicted-position candidate matching still fails to beat the feature-only candidate baseline. A brief variant that pushed the appended coordinate representation directly through the active query loss made ternary dense and weakened the bridge, so that path was rejected. The next target is prediction-error binding, not stronger similarity pressure.

@@ -29,6 +29,7 @@ class DefinitionBank(nn.Module):
         scale = cfg.d_model**-0.5
         self.axes = nn.Parameter(torch.randn(cfg.contexts, cfg.definitions_per_context, cfg.d_model) * scale)
         self.memory_axes = nn.Parameter(torch.randn(cfg.contexts, cfg.definitions_per_context, cfg.d_model) * scale)
+        self.position_read_logits = nn.Parameter(torch.zeros(cfg.contexts, cfg.definitions_per_context, cfg.workspace_latents))
         self.log_tau = nn.Parameter(torch.full((cfg.contexts, cfg.definitions_per_context), -2.0))
         self.log_alpha = nn.Parameter(torch.zeros(cfg.contexts, cfg.definitions_per_context))
         self.file_query = nn.Linear(cfg.definitions_per_context, cfg.definitions_per_context, bias=False)
@@ -54,8 +55,9 @@ class DefinitionBank(nn.Module):
         ctx_probs: torch.Tensor,
         memory_feature: torch.Tensor | None = None,
         memory_confidence: torch.Tensor | None = None,
+        token_position: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        raw = self.raw_scores(eps, ctx_probs, memory_feature, memory_confidence)
+        raw = self.raw_scores(eps, ctx_probs, memory_feature, memory_confidence, token_position)
         tau = torch.einsum("bk,kj->bj", ctx_probs, self.log_tau.exp())
         alpha = torch.einsum("bk,kj->bj", ctx_probs, self.log_alpha.exp())
         return TernaryProject.apply(raw, tau, alpha)
@@ -66,10 +68,18 @@ class DefinitionBank(nn.Module):
         ctx_probs: torch.Tensor,
         memory_feature: torch.Tensor | None = None,
         memory_confidence: torch.Tensor | None = None,
+        token_position: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        pooled = eps.mean(dim=1)
         axes = F.normalize(self.axes, dim=-1)
-        per_ctx = torch.einsum("bd,kjd->bkj", pooled, axes)
+        if self.cfg.use_position_aware_definition_read:
+            token_count = eps.shape[1]
+            local_scores = torch.einsum("bld,kjd->blkj", eps, axes)
+            read_logits = self.position_read_logits[..., :token_count]
+            read_weights = F.softmax(read_logits, dim=-1)
+            per_ctx = torch.einsum("blkj,kjl->bkj", local_scores, read_weights)
+        else:
+            pooled = eps.mean(dim=1)
+            per_ctx = torch.einsum("bd,kjd->bkj", pooled, axes)
         raw = torch.einsum("bk,bkj->bj", ctx_probs, per_ctx)
         if memory_feature is not None and self.cfg.use_memory_conditioning:
             confidence = memory_confidence if memory_confidence is not None else torch.ones(
