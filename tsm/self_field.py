@@ -36,6 +36,7 @@ from .types import DriveState, TickOutput, TrainOutput
 
 ORACLE_POSITION_NOISE_SWEEP_PX = (0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 7.0, 8.0)
 ORACLE_POSITION_NOISE_SWEEP_TRIALS = 8
+ORACLE_ERROR_SHAPE_PX = 6.5
 
 
 def _mode_context_stats(
@@ -1215,6 +1216,415 @@ def _oracle_pair_file_slot_noise_sweep_metrics(
             dtype=dtype,
             device=device,
         )
+    return out
+
+
+def _mean_or_zero(values: list[torch.Tensor], zero: torch.Tensor) -> torch.Tensor:
+    return torch.stack(values).mean() if values else zero
+
+
+def _quantile_or_zero(values: torch.Tensor, q: float, zero: torch.Tensor) -> torch.Tensor:
+    if values.numel() == 0:
+        return zero
+    return torch.quantile(values.reshape(-1), q)
+
+
+def _pearson_or_zero(left: torch.Tensor, right: torch.Tensor, zero: torch.Tensor) -> torch.Tensor:
+    if left.numel() < 2 or right.numel() < 2:
+        return zero
+    left = left.reshape(-1)
+    right = right.reshape(-1)
+    left_centered = left - left.mean()
+    right_centered = right - right.mean()
+    denom = left_centered.norm() * right_centered.norm()
+    if bool((denom <= 1e-8).item()):
+        return zero
+    return (left_centered * right_centered).sum() / denom
+
+
+def _paired_endpoint_error_structure_metrics(
+    predicted_positions: torch.Tensor,
+    predicted_valid: torch.Tensor,
+    target_positions: torch.Tensor,
+    file_instance_labels: torch.Tensor,
+    target_instance_labels: torch.Tensor,
+    cfg: TsmConfig,
+    distractor_positions: torch.Tensor | None,
+    distractor_instance_labels: torch.Tensor | None,
+) -> dict[str, torch.Tensor]:
+    dtype = predicted_positions.dtype
+    device = predicted_positions.device
+    zero = torch.zeros((), dtype=dtype, device=device)
+    if (
+        distractor_positions is None
+        or distractor_instance_labels is None
+        or predicted_positions.numel() == 0
+        or target_positions.numel() == 0
+        or distractor_positions.numel() == 0
+        or file_instance_labels.numel() == 0
+        or target_instance_labels.numel() == 0
+        or distractor_instance_labels.numel() == 0
+    ):
+        return {
+            "valid_pair_fraction": zero,
+            "true_pair_distance": zero,
+            "predicted_pair_distance": zero,
+            "pair_distance_ratio": zero,
+            "pair_distance_compression": zero,
+            "midpoint_error": zero,
+            "midpoint_pull": zero,
+            "target_error_mean": zero,
+            "distractor_error_mean": zero,
+            "error_mean": zero,
+            "error_median": zero,
+            "error_p75": zero,
+            "error_p90": zero,
+            "error_p95": zero,
+            "error_max": zero,
+            "target_bias_x": zero,
+            "target_bias_y": zero,
+            "distractor_bias_x": zero,
+            "distractor_bias_y": zero,
+            "bias_norm": zero,
+            "paired_error_cosine": zero,
+            "paired_error_x_correlation": zero,
+            "paired_error_y_correlation": zero,
+        }
+
+    file_count = min(predicted_positions.shape[0], predicted_valid.shape[0], file_instance_labels.shape[0])
+    query_count = min(
+        target_positions.shape[0],
+        target_instance_labels.shape[0],
+        distractor_positions.shape[0],
+        distractor_instance_labels.shape[0],
+    )
+    predicted_positions = predicted_positions[:file_count].to(device=device, dtype=dtype)
+    predicted_valid = predicted_valid[:file_count].to(device=device, dtype=torch.bool)
+    file_instance_labels = file_instance_labels[:file_count].to(device=device, dtype=torch.long)
+    target_positions = target_positions[:query_count].to(device=device, dtype=dtype)
+    distractor_positions = distractor_positions[:query_count].to(device=device, dtype=dtype)
+    target_instance_labels = target_instance_labels[:query_count].to(device=device, dtype=torch.long)
+    distractor_instance_labels = distractor_instance_labels[:query_count].to(device=device, dtype=torch.long)
+    scale = float(max(1, cfg.image_size))
+
+    true_distances: list[torch.Tensor] = []
+    predicted_distances: list[torch.Tensor] = []
+    midpoint_errors: list[torch.Tensor] = []
+    midpoint_pulls: list[torch.Tensor] = []
+    target_errors: list[torch.Tensor] = []
+    distractor_errors: list[torch.Tensor] = []
+    target_error_vectors: list[torch.Tensor] = []
+    distractor_error_vectors: list[torch.Tensor] = []
+    error_cosines: list[torch.Tensor] = []
+    valid_pairs = 0
+
+    for row in range(query_count):
+        target_matches = torch.nonzero(file_instance_labels == target_instance_labels[row], as_tuple=False).flatten()
+        distractor_matches = torch.nonzero(file_instance_labels == distractor_instance_labels[row], as_tuple=False).flatten()
+        if target_matches.numel() == 0 or distractor_matches.numel() == 0:
+            continue
+        target_idx = target_matches[0]
+        distractor_idx = distractor_matches[0]
+        if not bool((predicted_valid[target_idx] & predicted_valid[distractor_idx]).item()):
+            continue
+        target_pred = predicted_positions[target_idx]
+        distractor_pred = predicted_positions[distractor_idx]
+        target_true = target_positions[row]
+        distractor_true = distractor_positions[row]
+        true_pair = (distractor_true - target_true).norm() / scale
+        predicted_pair = (distractor_pred - target_pred).norm() / scale
+        true_midpoint = 0.5 * (target_true + distractor_true)
+        predicted_midpoint = 0.5 * (target_pred + distractor_pred)
+        true_midpoint_radius = 0.5 * (distractor_true - target_true).norm()
+        predicted_midpoint_radius = 0.5 * (
+            (target_pred - true_midpoint).norm() + (distractor_pred - true_midpoint).norm()
+        )
+        target_error = (target_pred - target_true) / scale
+        distractor_error = (distractor_pred - distractor_true) / scale
+        target_error_norm = target_error.norm()
+        distractor_error_norm = distractor_error.norm()
+        cosine_denom = target_error_norm * distractor_error_norm
+        cosine = (
+            (target_error * distractor_error).sum() / cosine_denom
+            if bool((cosine_denom > 1e-8).item())
+            else zero
+        )
+
+        valid_pairs += 1
+        true_distances.append(true_pair)
+        predicted_distances.append(predicted_pair)
+        midpoint_errors.append((predicted_midpoint - true_midpoint).norm() / scale)
+        midpoint_pulls.append((true_midpoint_radius - predicted_midpoint_radius) / scale)
+        target_errors.append(target_error_norm)
+        distractor_errors.append(distractor_error_norm)
+        target_error_vectors.append(target_error)
+        distractor_error_vectors.append(distractor_error)
+        error_cosines.append(cosine)
+
+    all_errors = torch.cat((
+        torch.stack(target_errors) if target_errors else torch.empty(0, dtype=dtype, device=device),
+        torch.stack(distractor_errors) if distractor_errors else torch.empty(0, dtype=dtype, device=device),
+    ))
+    target_vectors = torch.stack(target_error_vectors) if target_error_vectors else torch.empty(0, 2, dtype=dtype, device=device)
+    distractor_vectors = (
+        torch.stack(distractor_error_vectors) if distractor_error_vectors else torch.empty(0, 2, dtype=dtype, device=device)
+    )
+    true_pair_mean = _mean_or_zero(true_distances, zero)
+    predicted_pair_mean = _mean_or_zero(predicted_distances, zero)
+    target_bias = target_vectors.mean(dim=0) if target_vectors.numel() > 0 else torch.zeros(2, dtype=dtype, device=device)
+    distractor_bias = (
+        distractor_vectors.mean(dim=0) if distractor_vectors.numel() > 0 else torch.zeros(2, dtype=dtype, device=device)
+    )
+    combined_bias = 0.5 * (target_bias + distractor_bias)
+    return {
+        "valid_pair_fraction": torch.tensor(
+            float(valid_pairs) / float(max(1, query_count)),
+            dtype=dtype,
+            device=device,
+        ),
+        "true_pair_distance": true_pair_mean,
+        "predicted_pair_distance": predicted_pair_mean,
+        "pair_distance_ratio": predicted_pair_mean / true_pair_mean.clamp_min(1e-6),
+        "pair_distance_compression": true_pair_mean - predicted_pair_mean,
+        "midpoint_error": _mean_or_zero(midpoint_errors, zero),
+        "midpoint_pull": _mean_or_zero(midpoint_pulls, zero),
+        "target_error_mean": _mean_or_zero(target_errors, zero),
+        "distractor_error_mean": _mean_or_zero(distractor_errors, zero),
+        "error_mean": all_errors.mean() if all_errors.numel() > 0 else zero,
+        "error_median": _quantile_or_zero(all_errors, 0.50, zero),
+        "error_p75": _quantile_or_zero(all_errors, 0.75, zero),
+        "error_p90": _quantile_or_zero(all_errors, 0.90, zero),
+        "error_p95": _quantile_or_zero(all_errors, 0.95, zero),
+        "error_max": all_errors.max() if all_errors.numel() > 0 else zero,
+        "target_bias_x": target_bias[0],
+        "target_bias_y": target_bias[1],
+        "distractor_bias_x": distractor_bias[0],
+        "distractor_bias_y": distractor_bias[1],
+        "bias_norm": combined_bias.norm(),
+        "paired_error_cosine": _mean_or_zero(error_cosines, zero),
+        "paired_error_x_correlation": _pearson_or_zero(
+            target_vectors[:, 0] if target_vectors.numel() > 0 else target_vectors.reshape(-1),
+            distractor_vectors[:, 0] if distractor_vectors.numel() > 0 else distractor_vectors.reshape(-1),
+            zero,
+        ),
+        "paired_error_y_correlation": _pearson_or_zero(
+            target_vectors[:, 1] if target_vectors.numel() > 0 else target_vectors.reshape(-1),
+            distractor_vectors[:, 1] if distractor_vectors.numel() > 0 else distractor_vectors.reshape(-1),
+            zero,
+        ),
+    }
+
+
+def _paired_predicted_file_slot_metrics(
+    predicted_positions: torch.Tensor,
+    predicted_valid: torch.Tensor,
+    slot_positions: torch.Tensor,
+    slot_valid: torch.Tensor,
+    target_positions: torch.Tensor,
+    file_instance_labels: torch.Tensor,
+    target_instance_labels: torch.Tensor,
+    group_labels: torch.Tensor,
+    cfg: TsmConfig,
+    distractor_positions: torch.Tensor | None,
+    distractor_instance_labels: torch.Tensor | None,
+) -> dict[str, torch.Tensor]:
+    dtype = predicted_positions.dtype
+    device = predicted_positions.device
+    zero = torch.zeros((), dtype=dtype, device=device)
+    if (
+        distractor_positions is None
+        or distractor_instance_labels is None
+        or predicted_positions.numel() == 0
+        or predicted_valid.numel() == 0
+        or slot_positions.numel() == 0
+        or target_positions.numel() == 0
+        or file_instance_labels.numel() == 0
+        or target_instance_labels.numel() == 0
+    ):
+        return {}
+
+    file_count = min(predicted_positions.shape[0], predicted_valid.shape[0], file_instance_labels.shape[0])
+    query_count = min(
+        slot_positions.shape[0],
+        slot_valid.shape[0],
+        target_positions.shape[0],
+        target_instance_labels.shape[0],
+        group_labels.shape[0],
+        distractor_positions.shape[0],
+        distractor_instance_labels.shape[0],
+    )
+    predicted_positions = predicted_positions[:file_count].to(device=device, dtype=dtype)
+    predicted_valid = predicted_valid[:file_count].to(device=device, dtype=torch.bool)
+    file_instance_labels = file_instance_labels[:file_count].to(device=device, dtype=torch.long)
+    slot_positions = slot_positions[:query_count].to(device=device, dtype=dtype)
+    slot_valid = slot_valid[:query_count].to(device=device, dtype=torch.bool)
+    target_positions = target_positions[:query_count].to(device=device, dtype=dtype)
+    target_instance_labels = target_instance_labels[:query_count].to(device=device, dtype=torch.long)
+    group_labels = group_labels[:query_count].to(device=device, dtype=torch.long)
+    distractor_positions = distractor_positions[:query_count].to(device=device, dtype=dtype)
+    distractor_instance_labels = distractor_instance_labels[:query_count].to(device=device, dtype=torch.long)
+
+    collected: dict[str, list[torch.Tensor]] = {}
+    valid_rows = 0
+    for row in range(query_count):
+        target_matches = torch.nonzero(file_instance_labels == target_instance_labels[row], as_tuple=False).flatten()
+        distractor_matches = torch.nonzero(file_instance_labels == distractor_instance_labels[row], as_tuple=False).flatten()
+        if target_matches.numel() == 0 or distractor_matches.numel() == 0:
+            continue
+        target_idx = target_matches[0]
+        distractor_idx = distractor_matches[0]
+        if not bool((predicted_valid[target_idx] & predicted_valid[distractor_idx]).item()):
+            continue
+        row_file_positions = torch.stack((predicted_positions[target_idx], predicted_positions[distractor_idx]), dim=0)
+        row_file_labels = torch.stack((target_instance_labels[row], distractor_instance_labels[row]), dim=0)
+        row_group_labels = group_labels[row].view(1).expand(2)
+        row_metrics = _file_slot_assignment_metrics(
+            row_file_positions,
+            torch.ones(2, dtype=torch.bool, device=device),
+            slot_positions[row:row + 1],
+            slot_valid[row:row + 1],
+            target_positions[row:row + 1],
+            row_file_labels,
+            target_instance_labels[row:row + 1],
+            row_group_labels,
+            cfg,
+            distractor_positions=distractor_positions[row:row + 1],
+            distractor_instance_labels=distractor_instance_labels[row:row + 1],
+        )
+        valid_rows += 1
+        for key, value in row_metrics.items():
+            collected.setdefault(key, []).append(value)
+
+    if not collected:
+        return {
+            "target_match_accuracy": zero,
+            "target_hard_match_accuracy": zero,
+            "distractor_match_accuracy": zero,
+            "pair_match_accuracy": zero,
+            "candidate_mean_count": zero,
+            "row_coverage_fraction": zero,
+            "target_file_recall_fraction": zero,
+            "distractor_file_recall_fraction": zero,
+            "assignment_position_error": zero,
+            "target_assignment_position_error": zero,
+            "distractor_assignment_position_error": zero,
+            "assignment_object_file_id_usage": zero,
+            "assignment_object_id_usage": zero,
+            "assignment_sequence_id_usage": zero,
+            "valid_pair_fraction": zero,
+        }
+    out = {
+        key: torch.stack(values).mean() if values else zero
+        for key, values in collected.items()
+    }
+    out["valid_pair_fraction"] = torch.tensor(float(valid_rows) / float(max(1, query_count)), dtype=dtype, device=device)
+    return out
+
+
+def _oracle_error_shape_file_slot_metrics(
+    slot_positions: torch.Tensor,
+    slot_valid: torch.Tensor,
+    target_positions: torch.Tensor,
+    target_instance_labels: torch.Tensor,
+    group_labels: torch.Tensor,
+    cfg: TsmConfig,
+    distractor_positions: torch.Tensor | None,
+    distractor_instance_labels: torch.Tensor | None,
+) -> dict[str, torch.Tensor]:
+    dtype = slot_positions.dtype
+    device = slot_positions.device
+    zero = torch.zeros((), dtype=dtype, device=device)
+    if (
+        distractor_positions is None
+        or distractor_instance_labels is None
+        or distractor_positions.numel() == 0
+        or distractor_instance_labels.numel() == 0
+    ):
+        return {}
+    query_count = min(
+        slot_positions.shape[0],
+        slot_valid.shape[0],
+        target_positions.shape[0],
+        target_instance_labels.shape[0],
+        distractor_positions.shape[0],
+        distractor_instance_labels.shape[0],
+        group_labels.shape[0],
+    )
+    if query_count == 0:
+        return {}
+
+    slot_positions = slot_positions[:query_count].to(device=device, dtype=dtype)
+    slot_valid = slot_valid[:query_count].to(device=device, dtype=torch.bool)
+    target_positions = target_positions[:query_count].to(device=device, dtype=dtype)
+    distractor_positions = distractor_positions[:query_count].to(device=device, dtype=dtype)
+    target_instance_labels = target_instance_labels[:query_count].to(device=device, dtype=torch.long)
+    distractor_instance_labels = distractor_instance_labels[:query_count].to(device=device, dtype=torch.long)
+    group_labels = group_labels[:query_count].to(device=device, dtype=torch.long)
+    rows = torch.arange(query_count, device=device, dtype=dtype)
+    scale = float(max(1, cfg.image_size))
+    error_px = float(ORACLE_ERROR_SHAPE_PX)
+
+    pair_delta = distractor_positions - target_positions
+    pair_direction = pair_delta / pair_delta.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    shared_angle = rows * 1.61803398875 + 0.71
+    shared_direction = torch.stack((torch.cos(shared_angle), torch.sin(shared_angle)), dim=-1)
+    tail_mask = (torch.arange(query_count, device=device) % 4) == 0
+
+    shapes = {
+        "center_bias": (
+            target_positions + pair_direction * error_px,
+            distractor_positions - pair_direction * error_px,
+        ),
+        "correlated": (
+            target_positions + shared_direction * error_px,
+            distractor_positions + shared_direction * error_px,
+        ),
+        "heavy_tail": (
+            torch.where(tail_mask.unsqueeze(-1), target_positions + pair_direction * (error_px * 4.0), target_positions),
+            torch.where(tail_mask.unsqueeze(-1), distractor_positions - pair_direction * (error_px * 4.0), distractor_positions),
+        ),
+    }
+
+    out: dict[str, torch.Tensor] = {}
+    for shape_name, (shape_target, shape_distractor) in shapes.items():
+        collected: dict[str, list[torch.Tensor]] = {}
+        injected_errors: list[torch.Tensor] = []
+        predicted_pair_distances: list[torch.Tensor] = []
+        true_pair_distances: list[torch.Tensor] = []
+        for row in range(query_count):
+            row_file_positions = torch.stack((shape_target[row], shape_distractor[row]), dim=0)
+            row_file_labels = torch.stack((target_instance_labels[row], distractor_instance_labels[row]), dim=0)
+            row_group_labels = group_labels[row].view(1).expand(2)
+            row_metrics = _file_slot_assignment_metrics(
+                row_file_positions,
+                torch.ones(2, dtype=torch.bool, device=device),
+                slot_positions[row:row + 1],
+                slot_valid[row:row + 1],
+                target_positions[row:row + 1],
+                row_file_labels,
+                target_instance_labels[row:row + 1],
+                row_group_labels,
+                cfg,
+                distractor_positions=distractor_positions[row:row + 1],
+                distractor_instance_labels=distractor_instance_labels[row:row + 1],
+            )
+            for key, value in row_metrics.items():
+                collected.setdefault(key, []).append(value)
+            injected_errors.extend([
+                (shape_target[row] - target_positions[row]).norm() / scale,
+                (shape_distractor[row] - distractor_positions[row]).norm() / scale,
+            ])
+            predicted_pair_distances.append((shape_distractor[row] - shape_target[row]).norm() / scale)
+            true_pair_distances.append((distractor_positions[row] - target_positions[row]).norm() / scale)
+        for key, values in collected.items():
+            out[f"{shape_name}_{key}"] = torch.stack(values).mean() if values else zero
+        error_mean = torch.stack(injected_errors).mean() if injected_errors else zero
+        predicted_pair = torch.stack(predicted_pair_distances).mean() if predicted_pair_distances else zero
+        true_pair = torch.stack(true_pair_distances).mean() if true_pair_distances else zero
+        out[f"{shape_name}_injected_error"] = error_mean
+        out[f"{shape_name}_predicted_pair_distance"] = predicted_pair
+        out[f"{shape_name}_pair_distance_ratio"] = predicted_pair / true_pair.clamp_min(1e-6)
+        out[f"{shape_name}_position_noise_px"] = torch.tensor(error_px, dtype=dtype, device=device)
     return out
 
 
@@ -2654,6 +3064,35 @@ class Self(nn.Module):
                                 _candidate_path_context_metrics(diagnostics, image_t),
                             ))
                             diagnostics.update(_prefix_metrics(
+                                "reappeared_dynamics_endpoint_",
+                                _paired_endpoint_error_structure_metrics(
+                                    dynamics_position.detach().to(image_t.dtype),
+                                    file_slot_valid,
+                                    target_position_for_reappeared,
+                                    source_sequences,
+                                    source_sequences,
+                                    self.cfg,
+                                    slot_distractor_position,
+                                    distractor_sequences,
+                                ),
+                            ))
+                            diagnostics.update(_prefix_metrics(
+                                "reappeared_dynamics_local_file_slot_",
+                                _paired_predicted_file_slot_metrics(
+                                    dynamics_position.detach().to(image_t.dtype),
+                                    file_slot_valid,
+                                    slot_output.position.to(image_t.dtype),
+                                    slot_output.valid,
+                                    target_position_for_reappeared,
+                                    source_sequences,
+                                    source_sequences,
+                                    source_labels,
+                                    self.cfg,
+                                    slot_distractor_position,
+                                    distractor_sequences,
+                                ),
+                            ))
+                            diagnostics.update(_prefix_metrics(
                                 "reappeared_oracle_position_global_file_slot_",
                                 _file_slot_assignment_metrics(
                                     target_position_for_reappeared.detach().to(image_t.dtype),
@@ -2703,6 +3142,19 @@ class Self(nn.Module):
                                     distractor_sequences,
                                 ),
                             ))
+                            diagnostics.update(_prefix_metrics(
+                                "reappeared_oracle_error_shape_file_slot_",
+                                _oracle_error_shape_file_slot_metrics(
+                                    slot_output.position.to(image_t.dtype),
+                                    slot_output.valid,
+                                    target_position_for_reappeared,
+                                    source_sequences,
+                                    source_labels,
+                                    self.cfg,
+                                    slot_distractor_position,
+                                    distractor_sequences,
+                                ),
+                            ))
                             if ballistic_position is not None and ballistic_valid is not None:
                                 ballistic_file_slot_valid = (
                                     memory_read.position_valid[reappeared_active]
@@ -2732,6 +3184,35 @@ class Self(nn.Module):
                                 diagnostics.update(_prefix_metrics(
                                     "reappeared_ballistic_file_slot_",
                                     _candidate_path_context_metrics(diagnostics, image_t),
+                                ))
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_ballistic_endpoint_",
+                                    _paired_endpoint_error_structure_metrics(
+                                        ballistic_position.detach().to(image_t.dtype),
+                                        ballistic_file_slot_valid,
+                                        target_position_for_reappeared,
+                                        source_sequences,
+                                        source_sequences,
+                                        self.cfg,
+                                        slot_distractor_position,
+                                        distractor_sequences,
+                                    ),
+                                ))
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_ballistic_local_file_slot_",
+                                    _paired_predicted_file_slot_metrics(
+                                        ballistic_position.detach().to(image_t.dtype),
+                                        ballistic_file_slot_valid,
+                                        slot_output.position.to(image_t.dtype),
+                                        slot_output.valid,
+                                        target_position_for_reappeared,
+                                        source_sequences,
+                                        source_sequences,
+                                        source_labels,
+                                        self.cfg,
+                                        slot_distractor_position,
+                                        distractor_sequences,
+                                    ),
                                 ))
                             file_slot_candidate_paths: list[tuple[str, torch.Tensor, torch.Tensor]] = []
                             if active_candidates is not None:

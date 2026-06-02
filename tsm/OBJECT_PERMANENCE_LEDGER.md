@@ -652,3 +652,47 @@ Latest held-out checkpoint:
 - oracle noise 8 px target / pair / assignment error: `0.725` / `0.725` / `0.264`
 
 The local two-file assignment mechanism tolerates endpoint noise through about `6 px` and starts degrading at `7 px`. The learned dynamics head sits at the edge of that budget: `0.232-0.234` normalized is about `6.5 px`. The hand ballistic baseline is worse at about `6.95 px`, and learned dynamics only improves it by `0.014-0.016` normalized, roughly `0.4 px`. The immediate target is therefore precise endpoint dynamics below the `6 px` cliff, plus preserving the relevant local live-file set. Appearance/context/gain routing remain unnecessary for this specific controlled failure.
+
+## Dynamics Error Shape And Local Pair Binding
+
+Run evaluated: `runs/20260602_064540_temporal_objects_contested_position`
+
+Config: `configs/temporal_objects_contested_position.yaml`
+
+This diagnostic separates endpoint error shape from global candidate-set failure. It reports:
+
+- local learned-dynamics file-to-slot assignment using only the target file and same-class distractor file for that row.
+- paired endpoint structure: true pair distance, predicted pair distance, midpoint pull, bias, error percentiles, and paired error correlation.
+- oracle error-shape injections at `6.5 px`: center-biased compression, correlated shared shift, and heavy-tail adversarial rows.
+
+Best held-out checkpoint:
+
+- global predicted-position target / hard / pair: `0.119` / `0.119` / `0.030`
+- local learned-dynamics target / hard / distractor / pair: `0.747` / `0.747` / `0.747` / `0.747`
+- local ballistic target / hard / pair: `1.000` / `1.000` / `1.000`
+- true pair distance: `0.457` normalized, `12.806 px`
+- predicted pair distance / ratio / compression: `0.440` / `0.962` / `0.017`
+- midpoint error / midpoint pull: `0.123` / `-0.007`
+- learned endpoint error mean / median / p75 / p90 / p95 / max: `0.234` / `0.243` / `0.292` / `0.429` / `0.491` / `0.501`
+- endpoint bias norm: `0.024`
+- paired error cosine / x-corr / y-corr: `-0.456` / `-0.555` / `-0.502`
+- center-biased oracle target / pair / ratio: `0.000` / `0.000` / `0.015`
+- correlated oracle target / pair / ratio: `1.000` / `1.000` / `1.000`
+- heavy-tail oracle target / pair / ratio: `0.737` / `0.737` / `1.543`
+
+Latest held-out checkpoint:
+
+- global predicted-position target / hard / pair: `0.119` / `0.119` / `0.030`
+- local learned-dynamics target / hard / distractor / pair: `0.747` / `0.747` / `0.747` / `0.747`
+- local ballistic target / hard / pair: `1.000` / `1.000` / `1.000`
+- true pair distance: `0.457` normalized, `12.806 px`
+- predicted pair distance / ratio / compression: `0.438` / `0.957` / `0.020`
+- midpoint error / midpoint pull: `0.123` / `-0.007`
+- learned endpoint error mean / median / p75 / p90 / p95 / max: `0.232` / `0.242` / `0.289` / `0.427` / `0.490` / `0.501`
+- endpoint bias norm: `0.027`
+- paired error cosine / x-corr / y-corr: `-0.448` / `-0.558` / `-0.506`
+- center-biased oracle target / pair / ratio: `0.000` / `0.000` / `0.015`
+- correlated oracle target / pair / ratio: `1.000` / `1.000` / `1.000`
+- heavy-tail oracle target / pair / ratio: `0.737` / `0.737` / `1.543`
+
+This corrects the prior interpretation. The learned head is not mainly compressing both tracks into the midpoint: predicted pair distance is only mildly compressed, midpoint pull is slightly negative, and correlated shared-shift noise does not hurt assignment. The local learned-dynamics binding result is also much better than the global predicted-position result, so `0.119` is mostly a live-candidate/global-selection failure, not purely an endpoint metrology failure. The learned endpoint error is heavy-tailed and anti-correlated across paired files; the synthetic heavy-tail injection reproduces the local learned-dynamics result closely (`0.737` vs `0.747`). The hand ballistic endpoint has worse mean error but perfect local assignment, which means the learned residual is bending some cases in identity-damaging ways. The next target should be a bounded residual-from-ballistic dynamics head plus a live local candidate set that keeps only the relevant competing files.

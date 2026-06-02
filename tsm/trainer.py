@@ -320,6 +320,21 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                         handle.write(f"- final_reappeared_ballistic_position_error: {last_metrics['reappeared_ballistic_position_error']:.6f}\n")
                         handle.write(f"- final_reappeared_ballistic_valid_fraction: {last_metrics['reappeared_ballistic_valid_fraction']:.3f}\n")
                         handle.write(f"- final_reappeared_dynamics_over_ballistic_position_improvement: {last_metrics['reappeared_dynamics_over_ballistic_position_improvement']:.6f}\n")
+                    if "reappeared_dynamics_endpoint_pair_distance_ratio" in last_metrics:
+                        handle.write(f"- final_reappeared_dynamics_endpoint_true_pair_distance: {last_metrics['reappeared_dynamics_endpoint_true_pair_distance']:.6f}\n")
+                        handle.write(f"- final_reappeared_dynamics_endpoint_predicted_pair_distance: {last_metrics['reappeared_dynamics_endpoint_predicted_pair_distance']:.6f}\n")
+                        handle.write(f"- final_reappeared_dynamics_endpoint_pair_distance_ratio: {last_metrics['reappeared_dynamics_endpoint_pair_distance_ratio']:.3f}\n")
+                        handle.write(f"- final_reappeared_dynamics_endpoint_pair_distance_compression: {last_metrics['reappeared_dynamics_endpoint_pair_distance_compression']:.6f}\n")
+                        handle.write(f"- final_reappeared_dynamics_endpoint_midpoint_error: {last_metrics['reappeared_dynamics_endpoint_midpoint_error']:.6f}\n")
+                        handle.write(f"- final_reappeared_dynamics_endpoint_midpoint_pull: {last_metrics['reappeared_dynamics_endpoint_midpoint_pull']:.6f}\n")
+                        handle.write(f"- final_reappeared_dynamics_endpoint_error_median: {last_metrics['reappeared_dynamics_endpoint_error_median']:.6f}\n")
+                        handle.write(f"- final_reappeared_dynamics_endpoint_error_p90: {last_metrics['reappeared_dynamics_endpoint_error_p90']:.6f}\n")
+                        handle.write(f"- final_reappeared_dynamics_endpoint_error_p95: {last_metrics['reappeared_dynamics_endpoint_error_p95']:.6f}\n")
+                        handle.write(f"- final_reappeared_dynamics_endpoint_error_max: {last_metrics['reappeared_dynamics_endpoint_error_max']:.6f}\n")
+                        handle.write(f"- final_reappeared_dynamics_endpoint_bias_norm: {last_metrics['reappeared_dynamics_endpoint_bias_norm']:.6f}\n")
+                        handle.write(f"- final_reappeared_dynamics_endpoint_paired_error_cosine: {last_metrics['reappeared_dynamics_endpoint_paired_error_cosine']:.3f}\n")
+                        handle.write(f"- final_reappeared_dynamics_endpoint_error_x_correlation: {last_metrics['reappeared_dynamics_endpoint_paired_error_x_correlation']:.3f}\n")
+                        handle.write(f"- final_reappeared_dynamics_endpoint_error_y_correlation: {last_metrics['reappeared_dynamics_endpoint_paired_error_y_correlation']:.3f}\n")
                     if "reappeared_definition_position_linear_error" in last_metrics:
                         handle.write(f"- final_reappeared_definition_position_linear_error: {last_metrics['reappeared_definition_position_linear_error']:.6f}\n")
                         handle.write(f"- final_reappeared_definition_position_linear_improvement: {last_metrics['reappeared_definition_position_linear_improvement']:.6f}\n")
@@ -367,7 +382,9 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                             ("reappeared_oracle_position_global_file_slot", "reappeared_oracle_position_global_file_slot_"),
                             ("reappeared_oracle_position_ceiling_file_slot", "reappeared_oracle_position_ceiling_file_slot_"),
                             ("reappeared_oracle_position_file_slot", "reappeared_oracle_position_file_slot_"),
+                            ("reappeared_dynamics_local_file_slot", "reappeared_dynamics_local_file_slot_"),
                             ("reappeared_ballistic_file_slot", "reappeared_ballistic_file_slot_"),
+                            ("reappeared_ballistic_local_file_slot", "reappeared_ballistic_local_file_slot_"),
                             ("reappeared_active_file_slot", "reappeared_active_file_slot_"),
                             ("reappeared_predicted_position_file_slot", "reappeared_predicted_position_file_slot_"),
                             ("reappeared_feature_only_file_slot", "reappeared_feature_only_file_slot_"),
@@ -388,6 +405,14 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                                 handle.write(f"- final_reappeared_oracle_noise_{noise_px}px_target_match_accuracy: {last_metrics[target_key]:.3f}\n")
                                 handle.write(f"- final_reappeared_oracle_noise_{noise_px}px_pair_match_accuracy: {last_metrics[f'{noise_prefix}pair_match_accuracy']:.3f}\n")
                                 handle.write(f"- final_reappeared_oracle_noise_{noise_px}px_assignment_position_error: {last_metrics[f'{noise_prefix}assignment_position_error']:.6f}\n")
+                        for shape_name in ("center_bias", "correlated", "heavy_tail"):
+                            shape_prefix = f"reappeared_oracle_error_shape_file_slot_{shape_name}_"
+                            target_key = f"{shape_prefix}target_match_accuracy"
+                            if target_key in last_metrics:
+                                handle.write(f"- final_reappeared_oracle_error_shape_{shape_name}_target_match_accuracy: {last_metrics[target_key]:.3f}\n")
+                                handle.write(f"- final_reappeared_oracle_error_shape_{shape_name}_pair_match_accuracy: {last_metrics[f'{shape_prefix}pair_match_accuracy']:.3f}\n")
+                                handle.write(f"- final_reappeared_oracle_error_shape_{shape_name}_injected_error: {last_metrics[f'{shape_prefix}injected_error']:.6f}\n")
+                                handle.write(f"- final_reappeared_oracle_error_shape_{shape_name}_pair_distance_ratio: {last_metrics[f'{shape_prefix}pair_distance_ratio']:.3f}\n")
                     if "active_file_expectation_pair" in last_metrics:
                         handle.write(f"- final_active_file_expectation_pair_loss: {last_metrics['active_file_expectation_pair']:.6f}\n")
                         handle.write(f"- final_active_file_expectation_hard_loss: {last_metrics['active_file_expectation_hard']:.6f}\n")

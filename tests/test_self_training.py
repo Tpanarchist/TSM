@@ -15,8 +15,11 @@ from tsm.self_field import (
     _active_file_gate_logits,
     _file_slot_assignment_metrics,
     _local_reappearance_images,
+    _oracle_error_shape_file_slot_metrics,
     _oracle_pair_file_slot_ceiling_metrics,
     _oracle_pair_file_slot_noise_sweep_metrics,
+    _paired_endpoint_error_structure_metrics,
+    _paired_predicted_file_slot_metrics,
     _state_prediction_error_matrix,
 )
 
@@ -363,6 +366,70 @@ def test_oracle_pair_file_slot_noise_sweep_reports_error_budget_curve():
     assert metrics["noise_6px_assignment_object_file_id_usage"].item() == 0.0
 
 
+def test_paired_endpoint_error_structure_reports_compression_and_tail():
+    cfg = TsmConfig(image_size=16)
+    metrics = _paired_endpoint_error_structure_metrics(
+        predicted_positions=torch.tensor([[5.0, 4.0], [9.0, 4.0]]),
+        predicted_valid=torch.tensor([True, True]),
+        target_positions=torch.tensor([[2.0, 4.0]]),
+        file_instance_labels=torch.tensor([10, 11], dtype=torch.long),
+        target_instance_labels=torch.tensor([10], dtype=torch.long),
+        cfg=cfg,
+        distractor_positions=torch.tensor([[12.0, 4.0]]),
+        distractor_instance_labels=torch.tensor([11], dtype=torch.long),
+    )
+
+    assert torch.allclose(metrics["true_pair_distance"], torch.tensor(10.0 / 16.0))
+    assert torch.allclose(metrics["predicted_pair_distance"], torch.tensor(4.0 / 16.0))
+    assert torch.allclose(metrics["pair_distance_compression"], torch.tensor(6.0 / 16.0))
+    assert metrics["midpoint_pull"].item() > 0.0
+    assert metrics["error_p95"].item() >= metrics["error_median"].item()
+
+
+def test_oracle_error_shape_file_slot_reports_failure_modes():
+    cfg = TsmConfig(image_size=16, object_slot_count=2)
+    metrics = _oracle_error_shape_file_slot_metrics(
+        slot_positions=torch.tensor([[[12.1, 4.0], [2.1, 4.0]]]),
+        slot_valid=torch.tensor([[True, True]]),
+        target_positions=torch.tensor([[2.0, 4.0]]),
+        target_instance_labels=torch.tensor([10], dtype=torch.long),
+        group_labels=torch.tensor([1], dtype=torch.long),
+        cfg=cfg,
+        distractor_positions=torch.tensor([[12.0, 4.0]]),
+        distractor_instance_labels=torch.tensor([11], dtype=torch.long),
+    )
+
+    assert "center_bias_target_match_accuracy" in metrics
+    assert "correlated_target_match_accuracy" in metrics
+    assert "heavy_tail_target_match_accuracy" in metrics
+    assert metrics["center_bias_position_noise_px"].item() == 6.5
+    assert metrics["center_bias_pair_distance_ratio"].item() < 1.0
+    assert metrics["correlated_pair_distance_ratio"].item() > 0.9
+
+
+def test_paired_predicted_file_slot_metrics_uses_local_file_pair():
+    cfg = TsmConfig(image_size=16, object_slot_count=2)
+    metrics = _paired_predicted_file_slot_metrics(
+        predicted_positions=torch.tensor([[2.1, 4.0], [12.1, 4.0], [7.0, 7.0]]),
+        predicted_valid=torch.tensor([True, True, True]),
+        slot_positions=torch.tensor([[[12.0, 4.0], [2.0, 4.0]]]),
+        slot_valid=torch.tensor([[True, True]]),
+        target_positions=torch.tensor([[2.0, 4.0]]),
+        file_instance_labels=torch.tensor([10, 11, 12], dtype=torch.long),
+        target_instance_labels=torch.tensor([10], dtype=torch.long),
+        group_labels=torch.tensor([1], dtype=torch.long),
+        cfg=cfg,
+        distractor_positions=torch.tensor([[12.0, 4.0]]),
+        distractor_instance_labels=torch.tensor([11], dtype=torch.long),
+    )
+
+    assert metrics["target_match_accuracy"].item() == 1.0
+    assert metrics["distractor_match_accuracy"].item() == 1.0
+    assert metrics["pair_match_accuracy"].item() == 1.0
+    assert metrics["candidate_mean_count"].item() == 2.0
+    assert metrics["valid_pair_fraction"].item() == 1.0
+
+
 def test_active_file_ballistic_position_uses_phase_elapsed_with_wrap():
     cfg = TsmConfig(image_size=28, active_file_expectation_phase_count=5, active_file_candidate_wrap=True)
     memory = Memory()
@@ -426,6 +493,7 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "mode": torch.tensor([0, 1, 2, 2, 3], dtype=torch.long),
         "phase": torch.tensor([0, 1, 2, 3, 4], dtype=torch.long),
         "object_id": torch.tensor([0, 1, 2, 3, 0], dtype=torch.long),
+        "track_id": torch.tensor([0, 1, 0, 1, 0], dtype=torch.long),
         "visible_t": torch.tensor([1, 1, 1, 0, 0], dtype=torch.float32),
         "visible_tp1": torch.tensor([1, 1, 0, 0, 1], dtype=torch.float32),
         "occluded_t": torch.tensor([0, 0, 0, 1, 1], dtype=torch.float32),
@@ -580,6 +648,45 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_ballistic_file_slot_assignment_object_file_id_usage",
         "reappeared_ballistic_file_slot_assignment_object_id_usage",
         "reappeared_ballistic_file_slot_assignment_sequence_id_usage",
+        "reappeared_dynamics_endpoint_valid_pair_fraction",
+        "reappeared_dynamics_endpoint_true_pair_distance",
+        "reappeared_dynamics_endpoint_predicted_pair_distance",
+        "reappeared_dynamics_endpoint_pair_distance_ratio",
+        "reappeared_dynamics_endpoint_pair_distance_compression",
+        "reappeared_dynamics_endpoint_midpoint_error",
+        "reappeared_dynamics_endpoint_midpoint_pull",
+        "reappeared_dynamics_endpoint_error_mean",
+        "reappeared_dynamics_endpoint_error_median",
+        "reappeared_dynamics_endpoint_error_p75",
+        "reappeared_dynamics_endpoint_error_p90",
+        "reappeared_dynamics_endpoint_error_p95",
+        "reappeared_dynamics_endpoint_error_max",
+        "reappeared_dynamics_endpoint_target_bias_x",
+        "reappeared_dynamics_endpoint_target_bias_y",
+        "reappeared_dynamics_endpoint_distractor_bias_x",
+        "reappeared_dynamics_endpoint_distractor_bias_y",
+        "reappeared_dynamics_endpoint_paired_error_cosine",
+        "reappeared_dynamics_endpoint_paired_error_x_correlation",
+        "reappeared_dynamics_endpoint_paired_error_y_correlation",
+        "reappeared_dynamics_local_file_slot_target_match_accuracy",
+        "reappeared_dynamics_local_file_slot_target_hard_match_accuracy",
+        "reappeared_dynamics_local_file_slot_distractor_match_accuracy",
+        "reappeared_dynamics_local_file_slot_pair_match_accuracy",
+        "reappeared_dynamics_local_file_slot_valid_pair_fraction",
+        "reappeared_ballistic_endpoint_pair_distance_ratio",
+        "reappeared_ballistic_endpoint_error_p95",
+        "reappeared_ballistic_local_file_slot_target_match_accuracy",
+        "reappeared_ballistic_local_file_slot_pair_match_accuracy",
+        "reappeared_oracle_error_shape_file_slot_center_bias_target_match_accuracy",
+        "reappeared_oracle_error_shape_file_slot_center_bias_pair_match_accuracy",
+        "reappeared_oracle_error_shape_file_slot_center_bias_pair_distance_ratio",
+        "reappeared_oracle_error_shape_file_slot_center_bias_injected_error",
+        "reappeared_oracle_error_shape_file_slot_correlated_target_match_accuracy",
+        "reappeared_oracle_error_shape_file_slot_correlated_pair_match_accuracy",
+        "reappeared_oracle_error_shape_file_slot_correlated_pair_distance_ratio",
+        "reappeared_oracle_error_shape_file_slot_heavy_tail_target_match_accuracy",
+        "reappeared_oracle_error_shape_file_slot_heavy_tail_pair_match_accuracy",
+        "reappeared_oracle_error_shape_file_slot_heavy_tail_injected_error",
         "reappeared_active_query_file_candidate_instance_match_accuracy",
         "reappeared_active_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_active_query_file_candidate_mean_count",
