@@ -533,3 +533,41 @@ Latest held-out checkpoint:
 - occluded bridge: `0.000`
 
 This clears the slot recoverability gate. The contested frame can now be decomposed into two object-local percept carriers without label assignment, and the slot carriers recover both target and distractor geometry with essentially perfect held-out R2. The sparse ternary slot readout is live but not dense. This is not yet an object-permanence win: object-file binding and the occluded Definition bridge are still unsolved. The next step is to make object files compete against slots, not whole-scene query states: each live file predicts an expected slot state/position, each visible slot supplies local evidence, and binding is decided by lowest joint file-to-slot prediction error.
+
+## File-to-Slot Trajectory Binding Probe
+
+Run: `runs/20260602_064540_temporal_objects_contested_position`
+
+Config: `configs/temporal_objects_contested_position.yaml`
+
+Before binding, the contested generator was audited for trajectory separability at the reappearance frame. Across train/test/held-out variants, the two true reappearance positions stay `12.806` px apart. The naive wrapped velocity projection remains inaccurate, with mean projection error around `8.289` to `10.470` px, so the learned dynamics path is still the relevant predictor.
+
+This patch adds a file-to-slot assignment probe. Object slots still recover the two visible objects without identity labels. Each object file supplies a learned-dynamics predicted reappearance position. Assignment solves the minimum joint position-error match between candidate files and recovered slots. `object_file_id`, `object_id`, and `sequence_id` are used only after assignment for scoring/audit; assignment usage remains `0.000 / 0.000 / 0.000`.
+
+Best held-out checkpoint:
+
+- slot pair position error / slot R2: `0.009` / `1.000`
+- slot ternary nonzero fraction: `0.247`
+- dynamics position error / improvement / valid fraction: `0.234` / `+0.162` / `1.000`
+- global file-slot target / hard / distractor / pair: `0.071` / `0.071` / `0.071` / `0.000`
+- global candidates / target recall / assignment error: `12.750` / `0.150` / `0.199`
+- predicted-position file-slot target / hard / distractor / pair: `0.119` / `0.119` / `0.109` / `0.030`
+- predicted-position candidates / target recall / assignment error: `7.632` / `0.247` / `0.222`
+- feature-only file-slot target / hard / distractor / pair: `0.071` / `0.071` / `0.071` / `0.000`
+- learned-active file-slot target / hard / distractor / pair: `0.110` / `0.110` / `0.110` / `0.000`
+- occluded bridge: `0.000`
+
+Latest held-out checkpoint:
+
+- slot pair position error / slot R2: `0.009` / `1.000`
+- slot ternary nonzero fraction: `0.263`
+- dynamics position error / improvement / valid fraction: `0.232` / `+0.165` / `1.000`
+- global file-slot target / hard / distractor / pair: `0.071` / `0.071` / `0.071` / `0.000`
+- global candidates / target recall / assignment error: `12.750` / `0.150` / `0.198`
+- predicted-position file-slot target / hard / distractor / pair: `0.119` / `0.119` / `0.109` / `0.030`
+- predicted-position candidates / target recall / assignment error: `7.632` / `0.247` / `0.220`
+- feature-only file-slot target / hard / distractor / pair: `0.071` / `0.071` / `0.071` / `0.000`
+- learned-active file-slot target / hard / distractor / pair: `0.119` / `0.119` / `0.119` / `0.000`
+- occluded bridge: `0.000`
+
+This is a clean negative/partial result. The generator is separable and the slot interface is no longer the bottleneck. Predicted-position gating improves over the global/feature-only floor, but only weakly: target recall reaches about `0.247`, exact/hard binding only `0.119`, pair binding only `0.030`, and the occluded Definition bridge remains absent. The failure has moved from visible object localization to active-file identity continuity. Position-only trajectory assignment is not enough; the next mechanism needs a better live-file candidate state and a file-to-slot prediction-error representation that includes local appearance/trajectory/context, not position alone.

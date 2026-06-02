@@ -12,6 +12,7 @@ from tsm.self_field import (
     _active_file_feature_only_candidate_mask,
     _active_file_gate_input_dim,
     _active_file_gate_logits,
+    _file_slot_assignment_metrics,
     _local_reappearance_images,
     _state_prediction_error_matrix,
 )
@@ -285,6 +286,35 @@ def test_object_memory_tracks_velocity_and_phase():
     assert torch.allclose(read.phase[2], torch.tensor([1.0]))
 
 
+def test_file_slot_assignment_matches_swapped_slots_without_identity_labels():
+    cfg = TsmConfig(image_size=16, object_slot_count=2)
+    metrics = _file_slot_assignment_metrics(
+        file_positions=torch.tensor([[2.0, 4.0], [12.0, 4.0]]),
+        file_valid=torch.tensor([True, True]),
+        slot_positions=torch.tensor([[[12.1, 4.0], [2.1, 4.0]]]),
+        slot_valid=torch.tensor([[True, True]]),
+        target_positions=torch.tensor([[2.0, 4.0]]),
+        file_instance_labels=torch.tensor([10, 11], dtype=torch.long),
+        target_instance_labels=torch.tensor([10], dtype=torch.long),
+        group_labels=torch.tensor([1, 1], dtype=torch.long),
+        cfg=cfg,
+        distractor_positions=torch.tensor([[12.0, 4.0]]),
+        distractor_instance_labels=torch.tensor([11], dtype=torch.long),
+    )
+
+    assert metrics["target_match_accuracy"].item() == 1.0
+    assert metrics["target_hard_match_accuracy"].item() == 1.0
+    assert metrics["distractor_match_accuracy"].item() == 1.0
+    assert metrics["pair_match_accuracy"].item() == 1.0
+    assert metrics["candidate_mean_count"].item() == 2.0
+    assert metrics["row_coverage_fraction"].item() == 1.0
+    assert metrics["target_file_recall_fraction"].item() == 1.0
+    assert metrics["distractor_file_recall_fraction"].item() == 1.0
+    assert metrics["assignment_object_file_id_usage"].item() == 0.0
+    assert metrics["assignment_object_id_usage"].item() == 0.0
+    assert metrics["assignment_sequence_id_usage"].item() == 0.0
+
+
 def test_forward_train_reports_temporal_object_diagnostics():
     cfg = TsmConfig(
         d_model=32,
@@ -417,6 +447,24 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_object_slot_ternary_zero_fraction",
         "reappeared_object_slot_ternary_nonzero_fraction",
         "reappeared_object_slot_ternary_axis_usage_count",
+        "reappeared_file_slot_target_match_accuracy",
+        "reappeared_file_slot_target_hard_match_accuracy",
+        "reappeared_file_slot_distractor_match_accuracy",
+        "reappeared_file_slot_pair_match_accuracy",
+        "reappeared_file_slot_candidate_mean_count",
+        "reappeared_file_slot_row_coverage_fraction",
+        "reappeared_file_slot_target_file_recall_fraction",
+        "reappeared_file_slot_distractor_file_recall_fraction",
+        "reappeared_file_slot_assignment_position_error",
+        "reappeared_file_slot_target_assignment_position_error",
+        "reappeared_file_slot_distractor_assignment_position_error",
+        "reappeared_file_slot_assignment_object_file_id_usage",
+        "reappeared_file_slot_assignment_object_id_usage",
+        "reappeared_file_slot_assignment_sequence_id_usage",
+        "reappeared_file_slot_occluded_bridge_delta",
+        "reappeared_file_slot_ternary_nonzero_fraction",
+        "reappeared_file_slot_dynamics_position_error",
+        "reappeared_file_slot_dynamics_valid_fraction",
         "reappeared_active_query_file_candidate_instance_match_accuracy",
         "reappeared_active_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_active_query_file_candidate_mean_count",
@@ -469,6 +517,9 @@ def test_forward_train_reports_temporal_object_diagnostics():
     assert out.diagnostics["reappeared_object_slot_count"].item() == 2.0
     assert out.diagnostics["reappeared_object_slot_assignment_object_file_id_usage"].item() == 0.0
     assert out.diagnostics["reappeared_object_slot_assignment_object_id_usage"].item() == 0.0
+    assert out.diagnostics["reappeared_file_slot_assignment_object_file_id_usage"].item() == 0.0
+    assert out.diagnostics["reappeared_file_slot_assignment_object_id_usage"].item() == 0.0
+    assert out.diagnostics["reappeared_file_slot_assignment_sequence_id_usage"].item() == 0.0
 
     dynamics_features = _active_file_dynamics_features(
         batch,

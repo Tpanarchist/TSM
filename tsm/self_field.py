@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from itertools import permutations
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -771,6 +773,187 @@ def _slot_ternary_metrics(slot_ternary: torch.Tensor, slot_valid: torch.Tensor) 
         "ternary_axis_usage_count": axis_nonzero.gt(0).to(dtype).sum(),
         "ternary_axis_usage_fraction": axis_nonzero.gt(0).to(dtype).mean(),
         "ternary_always_on_axis_fraction": axis_nonzero.ge(0.95).to(dtype).mean(),
+    }
+
+
+def _file_slot_assignment_metrics(
+    file_positions: torch.Tensor,
+    file_valid: torch.Tensor,
+    slot_positions: torch.Tensor,
+    slot_valid: torch.Tensor,
+    target_positions: torch.Tensor,
+    file_instance_labels: torch.Tensor,
+    target_instance_labels: torch.Tensor,
+    group_labels: torch.Tensor,
+    cfg: TsmConfig,
+    distractor_positions: torch.Tensor | None = None,
+    distractor_instance_labels: torch.Tensor | None = None,
+    candidate_mask: torch.Tensor | None = None,
+) -> dict[str, torch.Tensor]:
+    dtype = slot_positions.dtype
+    device = slot_positions.device
+    zero = torch.zeros((), dtype=dtype, device=device)
+    if (
+        file_positions.numel() == 0
+        or slot_positions.numel() == 0
+        or target_positions.numel() == 0
+        or file_instance_labels.numel() == 0
+        or target_instance_labels.numel() == 0
+    ):
+        return {
+            "target_match_accuracy": zero,
+            "target_hard_match_accuracy": zero,
+            "distractor_match_accuracy": zero,
+            "pair_match_accuracy": zero,
+            "candidate_mean_count": zero,
+            "row_coverage_fraction": zero,
+            "target_file_recall_fraction": zero,
+            "distractor_file_recall_fraction": zero,
+            "assignment_position_error": zero,
+            "target_assignment_position_error": zero,
+            "distractor_assignment_position_error": zero,
+            "assignment_object_file_id_usage": zero,
+            "assignment_object_id_usage": zero,
+            "assignment_sequence_id_usage": zero,
+        }
+
+    file_count = min(file_positions.shape[0], file_valid.shape[0], file_instance_labels.shape[0], group_labels.shape[0])
+    query_count = min(slot_positions.shape[0], slot_valid.shape[0], target_positions.shape[0], target_instance_labels.shape[0])
+    slot_count = slot_positions.shape[1]
+    if file_count == 0 or query_count == 0 or slot_count == 0:
+        return {
+            "target_match_accuracy": zero,
+            "target_hard_match_accuracy": zero,
+            "distractor_match_accuracy": zero,
+            "pair_match_accuracy": zero,
+            "candidate_mean_count": zero,
+            "row_coverage_fraction": zero,
+            "target_file_recall_fraction": zero,
+            "distractor_file_recall_fraction": zero,
+            "assignment_position_error": zero,
+            "target_assignment_position_error": zero,
+            "distractor_assignment_position_error": zero,
+            "assignment_object_file_id_usage": zero,
+            "assignment_object_id_usage": zero,
+            "assignment_sequence_id_usage": zero,
+        }
+
+    scale = float(max(1, cfg.image_size))
+    file_positions = file_positions[:file_count].to(device=device, dtype=dtype)
+    file_valid = file_valid[:file_count].to(device=device, dtype=torch.bool)
+    file_instance_labels = file_instance_labels[:file_count].to(device=device, dtype=torch.long)
+    group_labels = group_labels[:file_count].to(device=device, dtype=torch.long)
+    slot_positions = slot_positions[:query_count].to(device=device, dtype=dtype)
+    slot_valid = slot_valid[:query_count].to(device=device, dtype=torch.bool)
+    target_positions = target_positions[:query_count].to(device=device, dtype=dtype)
+    target_instance_labels = target_instance_labels[:query_count].to(device=device, dtype=torch.long)
+    if distractor_positions is not None and distractor_positions.numel() > 0:
+        distractor_positions = distractor_positions[:query_count].to(device=device, dtype=dtype)
+    if distractor_instance_labels is not None and distractor_instance_labels.numel() > 0:
+        distractor_instance_labels = distractor_instance_labels[:query_count].to(device=device, dtype=torch.long)
+    if candidate_mask is not None and candidate_mask.numel() > 0:
+        candidate_mask = candidate_mask[:query_count, :file_count].to(device=device, dtype=torch.bool)
+
+    target_hits: list[torch.Tensor] = []
+    hard_hits: list[torch.Tensor] = []
+    distractor_hits: list[torch.Tensor] = []
+    pair_hits: list[torch.Tensor] = []
+    target_recalls: list[torch.Tensor] = []
+    distractor_recalls: list[torch.Tensor] = []
+    row_coverages: list[torch.Tensor] = []
+    candidate_counts: list[torch.Tensor] = []
+    assignment_errors: list[torch.Tensor] = []
+    target_errors: list[torch.Tensor] = []
+    distractor_errors: list[torch.Tensor] = []
+    for row in range(query_count):
+        row_slot_valid = slot_valid[row]
+        valid_slot_indices = torch.nonzero(row_slot_valid, as_tuple=False).flatten()
+        row_file_valid = file_valid
+        if candidate_mask is not None:
+            row_file_valid = row_file_valid & candidate_mask[row]
+        valid_file_indices = torch.nonzero(row_file_valid, as_tuple=False).flatten()
+        has_assignment = valid_file_indices.numel() > 0 and valid_slot_indices.numel() > 0
+        row_coverages.append(torch.tensor(float(has_assignment), dtype=dtype, device=device))
+        if not has_assignment:
+            continue
+        row_slots = slot_positions[row, valid_slot_indices]
+        distances = torch.cdist(file_positions[valid_file_indices], row_slots) / scale
+        file_scores = distances.min(dim=1).values
+        k = min(valid_file_indices.numel(), max(1, valid_slot_indices.numel()))
+        selected_local = file_scores.topk(k, largest=False).indices
+        selected_files = valid_file_indices[selected_local]
+        selected_distances = distances[selected_local]
+        candidate_counts.append(torch.tensor(float(valid_file_indices.numel()), dtype=dtype, device=device))
+
+        target_label = target_instance_labels[row]
+        target_recalls.append((file_instance_labels[selected_files] == target_label).any().to(dtype))
+        if distractor_instance_labels is not None:
+            distractor_label = distractor_instance_labels[row]
+            distractor_recalls.append((file_instance_labels[selected_files] == distractor_label).any().to(dtype))
+        else:
+            distractor_label = None
+
+        assignment: dict[int, int] = {}
+        best_error = torch.tensor(float("inf"), dtype=dtype, device=device)
+        selected_count = int(selected_files.numel())
+        slot_local_count = int(valid_slot_indices.numel())
+        for file_order in permutations(range(selected_count), min(selected_count, slot_local_count)):
+            total = zero
+            for slot_local, file_local in enumerate(file_order):
+                total = total + selected_distances[file_local, slot_local]
+            if bool((total < best_error).item()):
+                best_error = total
+                assignment = {
+                    int(valid_slot_indices[slot_local].item()): int(selected_files[file_local].item())
+                    for slot_local, file_local in enumerate(file_order)
+                }
+        if not assignment:
+            continue
+        assignment_errors.append(best_error / max(1, len(assignment)))
+
+        target_slot = torch.cdist(
+            slot_positions[row].unsqueeze(0),
+            target_positions[row].view(1, 1, 2),
+        ).squeeze(0).squeeze(-1).masked_fill(~row_slot_valid, float("inf")).argmin()
+        target_file = assignment.get(int(target_slot.item()))
+        if target_file is not None:
+            hit = (file_instance_labels[target_file] == target_label).to(dtype)
+            target_hits.append(hit)
+            target_error = (file_positions[target_file] - slot_positions[row, target_slot]).norm() / scale
+            target_errors.append(target_error)
+            same_group_other = (group_labels == group_labels[target_file]) & (file_instance_labels != target_label)
+            if bool(same_group_other.any().item()):
+                hard_hits.append(hit)
+
+        if distractor_positions is not None and distractor_label is not None:
+            distractor_slot = torch.cdist(
+                slot_positions[row].unsqueeze(0),
+                distractor_positions[row].view(1, 1, 2),
+            ).squeeze(0).squeeze(-1).masked_fill(~row_slot_valid, float("inf")).argmin()
+            distractor_file = assignment.get(int(distractor_slot.item()))
+            if distractor_file is not None:
+                distractor_hit = (file_instance_labels[distractor_file] == distractor_label).to(dtype)
+                distractor_hits.append(distractor_hit)
+                distractor_error = (file_positions[distractor_file] - slot_positions[row, distractor_slot]).norm() / scale
+                distractor_errors.append(distractor_error)
+                if target_file is not None:
+                    pair_hits.append((hit.bool() & distractor_hit.bool()).to(dtype))
+
+    return {
+        "target_match_accuracy": torch.stack(target_hits).mean() if target_hits else zero,
+        "target_hard_match_accuracy": torch.stack(hard_hits).mean() if hard_hits else zero,
+        "distractor_match_accuracy": torch.stack(distractor_hits).mean() if distractor_hits else zero,
+        "pair_match_accuracy": torch.stack(pair_hits).mean() if pair_hits else zero,
+        "candidate_mean_count": torch.stack(candidate_counts).mean() if candidate_counts else zero,
+        "row_coverage_fraction": torch.stack(row_coverages).mean() if row_coverages else zero,
+        "target_file_recall_fraction": torch.stack(target_recalls).mean() if target_recalls else zero,
+        "distractor_file_recall_fraction": torch.stack(distractor_recalls).mean() if distractor_recalls else zero,
+        "assignment_position_error": torch.stack(assignment_errors).mean() if assignment_errors else zero,
+        "target_assignment_position_error": torch.stack(target_errors).mean() if target_errors else zero,
+        "distractor_assignment_position_error": torch.stack(distractor_errors).mean() if distractor_errors else zero,
+        "assignment_object_file_id_usage": zero,
+        "assignment_object_id_usage": zero,
+        "assignment_sequence_id_usage": zero,
     }
 
 
@@ -1940,6 +2123,8 @@ class Self(nn.Module):
                     if state_prediction_error.numel() > 0:
                         diagnostics["reappeared_state_prediction_error_mean"] = state_prediction_error.mean()
                     target_position_for_reappeared = None
+                    slot_output = None
+                    slot_distractor_position = None
                     if "object_position_tp1" in batch:
                         target_position_for_reappeared = batch["object_position_tp1"].to(
                             device=image_t.device,
@@ -1995,7 +2180,7 @@ class Self(nn.Module):
                         ))
                         if self.cfg.object_slot_count > 0:
                             slot_output = self.object_slots(image_tp1[reappeared_active])
-                            distractor_position = (
+                            slot_distractor_position = (
                                 batch["distractor_position_tp1"].to(device=image_t.device, dtype=image_t.dtype)[
                                     reappeared_active
                                 ]
@@ -2010,7 +2195,7 @@ class Self(nn.Module):
                                     slot_output.occupancy.to(image_t.dtype),
                                     slot_output.valid,
                                     target_position_for_reappeared,
-                                    distractor_position,
+                                    slot_distractor_position,
                                     self.cfg,
                                 ),
                             ))
@@ -2126,6 +2311,92 @@ class Self(nn.Module):
                     instance_ids = _object_instance_ids(batch, image_t.device)
                     if instance_ids is not None:
                         source_sequences = instance_ids[reappeared_active]
+                        if (
+                            slot_output is not None
+                            and target_position_for_reappeared is not None
+                            and dynamics_position is not None
+                            and dynamics_valid is not None
+                        ):
+                            file_slot_valid = (
+                                memory_read.position_valid[reappeared_active]
+                                & memory_read.hit[reappeared_active]
+                                & dynamics_valid.to(device=image_t.device, dtype=torch.bool)
+                                & (
+                                    memory_read.age[reappeared_active].view(-1)
+                                    <= self.cfg.active_file_candidate_max_age
+                                )
+                            )
+                            distractor_sequences = None
+                            if "track_id" in batch:
+                                reappeared_tracks = batch["track_id"].to(device=image_t.device, dtype=torch.long)[
+                                    reappeared_active
+                                ]
+                                source_sequences_long = source_sequences.to(device=image_t.device, dtype=torch.long)
+                                distractor_sequences = torch.where(
+                                    reappeared_tracks == 0,
+                                    source_sequences_long + 1,
+                                    source_sequences_long - 1,
+                                )
+                            diagnostics.update(_prefix_metrics(
+                                "reappeared_file_slot_",
+                                _file_slot_assignment_metrics(
+                                    dynamics_position.detach().to(image_t.dtype),
+                                    file_slot_valid,
+                                    slot_output.position.to(image_t.dtype),
+                                    slot_output.valid,
+                                    target_position_for_reappeared,
+                                    source_sequences,
+                                    source_sequences,
+                                    source_labels,
+                                    self.cfg,
+                                    distractor_positions=slot_distractor_position,
+                                    distractor_instance_labels=distractor_sequences,
+                                ),
+                            ))
+                            diagnostics.update(_prefix_metrics(
+                                "reappeared_file_slot_",
+                                _candidate_path_context_metrics(diagnostics, image_t),
+                            ))
+                            file_slot_candidate_paths: list[tuple[str, torch.Tensor]] = []
+                            if active_candidates is not None:
+                                file_slot_candidate_paths.append(("reappeared_active_file_slot_", active_candidates))
+                            if oracle_position_candidates is not None:
+                                file_slot_candidate_paths.append((
+                                    "reappeared_oracle_position_file_slot_",
+                                    oracle_position_candidates,
+                                ))
+                            if predicted_position_candidates is not None:
+                                file_slot_candidate_paths.append((
+                                    "reappeared_predicted_position_file_slot_",
+                                    predicted_position_candidates,
+                                ))
+                            if feature_only_candidates is not None:
+                                file_slot_candidate_paths.append((
+                                    "reappeared_feature_only_file_slot_",
+                                    feature_only_candidates,
+                                ))
+                            for file_slot_prefix, file_slot_candidates in file_slot_candidate_paths:
+                                diagnostics.update(_prefix_metrics(
+                                    file_slot_prefix,
+                                    _file_slot_assignment_metrics(
+                                        dynamics_position.detach().to(image_t.dtype),
+                                        file_slot_valid,
+                                        slot_output.position.to(image_t.dtype),
+                                        slot_output.valid,
+                                        target_position_for_reappeared,
+                                        source_sequences,
+                                        source_sequences,
+                                        source_labels,
+                                        self.cfg,
+                                        distractor_positions=slot_distractor_position,
+                                        distractor_instance_labels=distractor_sequences,
+                                        candidate_mask=file_slot_candidates,
+                                    ),
+                                ))
+                                diagnostics.update(_prefix_metrics(
+                                    file_slot_prefix,
+                                    _candidate_path_context_metrics(diagnostics, image_t),
+                                ))
                         diagnostics.update(_prefix_metrics(
                             "reappeared_file_",
                             grouped_instance_match_diagnostics(
@@ -2312,6 +2583,53 @@ class Self(nn.Module):
                                     learned_candidates,
                                 ),
                             ))
+                            if (
+                                slot_output is not None
+                                and target_position_for_reappeared is not None
+                                and dynamics_position is not None
+                                and dynamics_valid is not None
+                            ):
+                                learned_file_slot_valid = (
+                                    memory_read.position_valid[reappeared_active]
+                                    & memory_read.hit[reappeared_active]
+                                    & dynamics_valid.to(device=image_t.device, dtype=torch.bool)
+                                    & (
+                                        memory_read.age[reappeared_active].view(-1)
+                                        <= self.cfg.active_file_candidate_max_age
+                                    )
+                                )
+                                learned_distractor_sequences = None
+                                if "track_id" in batch:
+                                    reappeared_tracks = batch["track_id"].to(device=image_t.device, dtype=torch.long)[
+                                        reappeared_active
+                                    ]
+                                    source_sequences_long = source_sequences.to(device=image_t.device, dtype=torch.long)
+                                    learned_distractor_sequences = torch.where(
+                                        reappeared_tracks == 0,
+                                        source_sequences_long + 1,
+                                        source_sequences_long - 1,
+                                    )
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_learned_active_file_slot_",
+                                    _file_slot_assignment_metrics(
+                                        dynamics_position.detach().to(image_t.dtype),
+                                        learned_file_slot_valid,
+                                        slot_output.position.to(image_t.dtype),
+                                        slot_output.valid,
+                                        target_position_for_reappeared,
+                                        source_sequences,
+                                        source_sequences,
+                                        source_labels,
+                                        self.cfg,
+                                        distractor_positions=slot_distractor_position,
+                                        distractor_instance_labels=learned_distractor_sequences,
+                                        candidate_mask=learned_candidates,
+                                    ),
+                                ))
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_learned_active_file_slot_",
+                                    _candidate_path_context_metrics(diagnostics, image_t),
+                                ))
                             if state_prediction_error.numel() > 0:
                                 diagnostics.update(_prefix_metrics(
                                     "reappeared_learned_active_state_prediction_error_query_file_",

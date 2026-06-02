@@ -7,6 +7,7 @@ from tsm.data import (
     ImageStreamDataset,
     MultiModeSyntheticImageStreamDataset,
     TemporalObjectPermanenceDataset,
+    _contested_position,
     make_dataset,
 )
 
@@ -85,6 +86,18 @@ def test_contested_temporal_object_dataset_exposes_two_target_tracks():
     assert ds[8]["same_class_contested"].item() == 1.0
     assert ds[0]["image_t"].shape == (1, 28, 28)
     assert ds.sequential
+
+
+def test_contested_reappeared_trajectories_are_separable():
+    cfg = TsmConfig(d_model=16, image_size=28, image_channels=1)
+    for split in ("train", "test", "heldout"):
+        distances = []
+        for scene_id in range(16):
+            phase = 0
+            pos_a = torch.tensor(_contested_position(cfg, scene_id, 0, phase, split), dtype=torch.float32)
+            pos_b = torch.tensor(_contested_position(cfg, scene_id, 1, phase, split), dtype=torch.float32)
+            distances.append(torch.linalg.vector_norm(pos_a - pos_b))
+        assert torch.stack(distances).min().item() > 8.0
 
 
 def test_make_dataset_supports_temporal_object_alias():

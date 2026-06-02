@@ -342,6 +342,37 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                         if "reappeared_object_slot_ternary_nonzero_fraction" in last_metrics:
                             handle.write(f"- final_reappeared_object_slot_ternary_nonzero_fraction: {last_metrics['reappeared_object_slot_ternary_nonzero_fraction']:.3f}\n")
                             handle.write(f"- final_reappeared_object_slot_ternary_axis_usage_count: {last_metrics['reappeared_object_slot_ternary_axis_usage_count']:.1f}\n")
+                    if "reappeared_file_slot_target_match_accuracy" in last_metrics:
+                        handle.write(f"- final_reappeared_file_slot_target_match_accuracy: {last_metrics['reappeared_file_slot_target_match_accuracy']:.3f}\n")
+                        handle.write(f"- final_reappeared_file_slot_target_hard_match_accuracy: {last_metrics['reappeared_file_slot_target_hard_match_accuracy']:.3f}\n")
+                        handle.write(f"- final_reappeared_file_slot_distractor_match_accuracy: {last_metrics['reappeared_file_slot_distractor_match_accuracy']:.3f}\n")
+                        handle.write(f"- final_reappeared_file_slot_pair_match_accuracy: {last_metrics['reappeared_file_slot_pair_match_accuracy']:.3f}\n")
+                        handle.write(f"- final_reappeared_file_slot_candidate_mean_count: {last_metrics['reappeared_file_slot_candidate_mean_count']:.3f}\n")
+                        handle.write(f"- final_reappeared_file_slot_row_coverage: {last_metrics['reappeared_file_slot_row_coverage_fraction']:.3f}\n")
+                        handle.write(f"- final_reappeared_file_slot_target_file_recall: {last_metrics['reappeared_file_slot_target_file_recall_fraction']:.3f}\n")
+                        handle.write(f"- final_reappeared_file_slot_distractor_file_recall: {last_metrics['reappeared_file_slot_distractor_file_recall_fraction']:.3f}\n")
+                        handle.write(f"- final_reappeared_file_slot_assignment_position_error: {last_metrics['reappeared_file_slot_assignment_position_error']:.6f}\n")
+                        handle.write(f"- final_reappeared_file_slot_occluded_bridge_delta: {last_metrics['reappeared_file_slot_occluded_bridge_delta']:.6f}\n")
+                        handle.write(f"- final_reappeared_file_slot_ternary_nonzero_fraction: {last_metrics['reappeared_file_slot_ternary_nonzero_fraction']:.3f}\n")
+                        handle.write(f"- final_reappeared_file_slot_dynamics_position_error: {last_metrics['reappeared_file_slot_dynamics_position_error']:.6f}\n")
+                        handle.write(f"- final_reappeared_file_slot_dynamics_valid_fraction: {last_metrics['reappeared_file_slot_dynamics_valid_fraction']:.3f}\n")
+                        handle.write(f"- final_reappeared_file_slot_assignment_object_file_id_usage: {last_metrics['reappeared_file_slot_assignment_object_file_id_usage']:.1f}\n")
+                        handle.write(f"- final_reappeared_file_slot_assignment_object_id_usage: {last_metrics['reappeared_file_slot_assignment_object_id_usage']:.1f}\n")
+                        handle.write(f"- final_reappeared_file_slot_assignment_sequence_id_usage: {last_metrics['reappeared_file_slot_assignment_sequence_id_usage']:.1f}\n")
+                        for summary_name, metric_prefix in (
+                            ("reappeared_active_file_slot", "reappeared_active_file_slot_"),
+                            ("reappeared_predicted_position_file_slot", "reappeared_predicted_position_file_slot_"),
+                            ("reappeared_feature_only_file_slot", "reappeared_feature_only_file_slot_"),
+                            ("reappeared_learned_active_file_slot", "reappeared_learned_active_file_slot_"),
+                        ):
+                            target_key = f"{metric_prefix}target_match_accuracy"
+                            if target_key in last_metrics:
+                                handle.write(f"- final_{summary_name}_target_match_accuracy: {last_metrics[target_key]:.3f}\n")
+                                handle.write(f"- final_{summary_name}_target_hard_match_accuracy: {last_metrics[f'{metric_prefix}target_hard_match_accuracy']:.3f}\n")
+                                handle.write(f"- final_{summary_name}_distractor_match_accuracy: {last_metrics[f'{metric_prefix}distractor_match_accuracy']:.3f}\n")
+                                handle.write(f"- final_{summary_name}_pair_match_accuracy: {last_metrics[f'{metric_prefix}pair_match_accuracy']:.3f}\n")
+                                handle.write(f"- final_{summary_name}_candidate_mean_count: {last_metrics[f'{metric_prefix}candidate_mean_count']:.3f}\n")
+                                handle.write(f"- final_{summary_name}_target_file_recall: {last_metrics[f'{metric_prefix}target_file_recall_fraction']:.3f}\n")
                     if "active_file_expectation_pair" in last_metrics:
                         handle.write(f"- final_active_file_expectation_pair_loss: {last_metrics['active_file_expectation_pair']:.6f}\n")
                         handle.write(f"- final_active_file_expectation_hard_loss: {last_metrics['active_file_expectation_hard']:.6f}\n")
