@@ -181,6 +181,10 @@ def test_active_file_gate_accepts_context_features():
         inference_steps=1,
         learned_active_file_gate_context_features=True,
         learned_active_file_gate_expectation_features=True,
+        object_slot_count=2,
+        object_slot_sigma=1.8,
+        object_slot_nms_radius=4.0,
+        object_slot_match_radius=4.0,
     )
     model = Self(cfg)
     query = torch.rand(2, cfg.definitions_per_context)
@@ -299,6 +303,10 @@ def test_forward_train_reports_temporal_object_diagnostics():
         active_file_dynamics_weight=0.01,
         learned_active_file_gate_context_features=True,
         learned_active_file_gate_expectation_features=True,
+        object_slot_count=2,
+        object_slot_sigma=1.8,
+        object_slot_nms_radius=4.0,
+        object_slot_match_radius=4.0,
     )
     model = Self(cfg)
     batch = {
@@ -319,6 +327,7 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "unexpected_disappearance": torch.tensor([0, 0, 1, 0, 0], dtype=torch.float32),
         "object_position_t": torch.zeros(5, 2),
         "object_position_tp1": torch.zeros(5, 2),
+        "distractor_position_tp1": torch.ones(5, 2) * 8.0,
     }
 
     out = model.forward_train(batch)
@@ -389,6 +398,25 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_file_query_position_ablated_position_linear_improvement",
         "reappeared_memory_definition_position_ablated_position_linear_error",
         "reappeared_memory_definition_position_ablated_position_linear_improvement",
+        "reappeared_object_slot_count",
+        "reappeared_object_slot_valid_fraction",
+        "reappeared_object_slot_used_count",
+        "reappeared_object_slot_occupancy_entropy",
+        "reappeared_object_slot_separation",
+        "reappeared_object_slot_collapse_fraction",
+        "reappeared_object_slot_target_position_error",
+        "reappeared_object_slot_target_recall",
+        "reappeared_object_slot_distractor_position_error",
+        "reappeared_object_slot_distractor_recall",
+        "reappeared_object_slot_pair_position_error",
+        "reappeared_object_slot_assignment_object_file_id_usage",
+        "reappeared_object_slot_assignment_object_id_usage",
+        "reappeared_object_slot_position_linear_error",
+        "reappeared_object_slot_position_linear_improvement",
+        "reappeared_object_slot_position_linear_r2",
+        "reappeared_object_slot_ternary_zero_fraction",
+        "reappeared_object_slot_ternary_nonzero_fraction",
+        "reappeared_object_slot_ternary_axis_usage_count",
         "reappeared_active_query_file_candidate_instance_match_accuracy",
         "reappeared_active_query_file_candidate_instance_hard_match_accuracy",
         "reappeared_active_query_file_candidate_mean_count",
@@ -438,6 +466,9 @@ def test_forward_train_reports_temporal_object_diagnostics():
     assert out.diagnostics["object_file_id_bind_time_leakage_audit_pass"].item() == 1.0
     assert out.diagnostics["object_file_id_bind_time_candidate_filter_usage"].item() == 0.0
     assert out.diagnostics["object_file_id_auxiliary_label_usage"].item() == 1.0
+    assert out.diagnostics["reappeared_object_slot_count"].item() == 2.0
+    assert out.diagnostics["reappeared_object_slot_assignment_object_file_id_usage"].item() == 0.0
+    assert out.diagnostics["reappeared_object_slot_assignment_object_id_usage"].item() == 0.0
 
     dynamics_features = _active_file_dynamics_features(
         batch,

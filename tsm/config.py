@@ -68,6 +68,12 @@ class TsmConfig:
     learned_active_file_gate_detach_inputs: bool = True
     learned_active_file_gate_context_features: bool = False
     learned_active_file_gate_expectation_features: bool = False
+    object_slot_count: int = 0
+    object_slot_sigma: float = 2.8
+    object_slot_nms_radius: float = 5.0
+    object_slot_salience_threshold: float = 0.05
+    object_slot_match_radius: float = 4.0
+    object_slot_ternary_diagnostics: bool = True
 
 
 @dataclass

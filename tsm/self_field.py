@@ -27,6 +27,7 @@ from .mind import Mind
 from .perception import PerceptionSurface
 from .reality import Reality
 from .sae import SAE
+from .slots import ObjectSlotReadout
 from .trauma import TraumaMonitor
 from .types import DriveState, TickOutput, TrainOutput
 
@@ -589,6 +590,190 @@ def _state_prediction_error_matrix(actual_state: torch.Tensor, expected_state: t
     return (actual.unsqueeze(1) - expected.unsqueeze(0)).square().mean(dim=-1)
 
 
+def _object_slot_position_metrics(
+    slot_state: torch.Tensor,
+    slot_position: torch.Tensor,
+    slot_occupancy: torch.Tensor,
+    slot_valid: torch.Tensor,
+    target_position: torch.Tensor,
+    distractor_position: torch.Tensor | None,
+    cfg: TsmConfig,
+) -> dict[str, torch.Tensor]:
+    dtype = slot_state.dtype
+    device = slot_state.device
+    zero = torch.zeros((), dtype=dtype, device=device)
+    if slot_state.numel() == 0 or slot_position.numel() == 0 or target_position.numel() == 0:
+        metrics = {
+            "count": zero,
+            "valid_fraction": zero,
+            "used_count": zero,
+            "occupancy_entropy": zero,
+            "separation": zero,
+            "collapse_fraction": zero,
+            "target_position_error": zero,
+            "target_recall": zero,
+            "distractor_position_error": zero,
+            "distractor_recall": zero,
+            "pair_position_error": zero,
+            "assignment_object_file_id_usage": zero,
+            "assignment_object_id_usage": zero,
+        }
+        metrics.update(position_recoverability_diagnostics(slot_state.new_zeros((0, 1)), slot_position.new_zeros((0, 2))))
+        return metrics
+
+    count = min(slot_state.shape[0], slot_position.shape[0], slot_occupancy.shape[0], slot_valid.shape[0], target_position.shape[0])
+    slot_state = slot_state[:count]
+    slot_position = slot_position[:count].to(device=device, dtype=dtype)
+    slot_occupancy = slot_occupancy[:count].to(device=device, dtype=dtype)
+    slot_valid = slot_valid[:count].to(device=device, dtype=torch.bool)
+    target_position = target_position[:count].to(device=device, dtype=dtype)
+    object_positions = [target_position.unsqueeze(1)]
+    has_distractor = distractor_position is not None and distractor_position.numel() > 0
+    if has_distractor:
+        distractor_position = distractor_position[:count].to(device=device, dtype=dtype)
+        object_positions.append(distractor_position.unsqueeze(1))
+    objects = torch.cat(object_positions, dim=1)
+    distances = torch.cdist(slot_position, objects) / float(max(1, cfg.image_size))
+    distances = distances.masked_fill(~slot_valid.unsqueeze(-1), float("inf"))
+    threshold = float(cfg.object_slot_match_radius) / float(max(1, cfg.image_size))
+
+    target_min = distances[:, :, 0].amin(dim=1)
+    target_finite = torch.isfinite(target_min)
+    target_error = target_min[target_finite].mean() if bool(target_finite.any().item()) else zero
+    target_recall = (target_min <= threshold).to(dtype).mean()
+    if has_distractor:
+        distractor_min = distances[:, :, 1].amin(dim=1)
+        distractor_finite = torch.isfinite(distractor_min)
+        distractor_error = distractor_min[distractor_finite].mean() if bool(distractor_finite.any().item()) else zero
+        distractor_recall = (distractor_min <= threshold).to(dtype).mean()
+    else:
+        distractor_error = zero
+        distractor_recall = zero
+
+    matched_features: list[torch.Tensor] = []
+    matched_positions: list[torch.Tensor] = []
+    pair_errors: list[torch.Tensor] = []
+    object_count = objects.shape[1]
+    slot_count = slot_position.shape[1]
+    for row in range(count):
+        if object_count == 1:
+            best_slot = distances[row, :, 0].argmin()
+            if torch.isfinite(distances[row, best_slot, 0]):
+                matched_features.append(slot_state[row, best_slot])
+                matched_positions.append(objects[row, 0])
+                pair_errors.append(distances[row, best_slot, 0])
+            continue
+        best_error = torch.tensor(float("inf"), dtype=dtype, device=device)
+        best_indices: tuple[int, int] | None = None
+        for target_slot in range(slot_count):
+            if not bool(slot_valid[row, target_slot].item()):
+                continue
+            for distractor_slot in range(slot_count):
+                if target_slot == distractor_slot or not bool(slot_valid[row, distractor_slot].item()):
+                    continue
+                error = 0.5 * (distances[row, target_slot, 0] + distances[row, distractor_slot, 1])
+                if bool((error < best_error).item()):
+                    best_error = error
+                    best_indices = (target_slot, distractor_slot)
+        if best_indices is not None and torch.isfinite(best_error):
+            pair_errors.append(best_error)
+            matched_features.append(slot_state[row, best_indices[0]])
+            matched_positions.append(objects[row, 0])
+            matched_features.append(slot_state[row, best_indices[1]])
+            matched_positions.append(objects[row, 1])
+
+    if matched_features:
+        recover_features = torch.stack(matched_features)
+        recover_positions = torch.stack(matched_positions)
+        recoverability = position_recoverability_diagnostics(
+            recover_features,
+            recover_positions,
+            scale=float(max(1, cfg.image_size)),
+        )
+    else:
+        recoverability = position_recoverability_diagnostics(slot_state.new_zeros((0, 1)), slot_position.new_zeros((0, 2)))
+
+    valid_fraction = slot_valid.to(dtype).mean()
+    occupancy = slot_occupancy * slot_valid.to(dtype)
+    occupancy_sum = occupancy.sum(dim=1, keepdim=True).clamp_min(1e-6)
+    probs = occupancy / occupancy_sum
+    entropy = -(probs * probs.clamp_min(1e-8).log()).sum(dim=1)
+    if slot_count > 1:
+        entropy = entropy / torch.log(torch.tensor(float(slot_count), dtype=dtype, device=device)).clamp_min(1e-6)
+        pairwise = torch.cdist(slot_position, slot_position) / float(max(1, cfg.image_size))
+        pair_valid = slot_valid.unsqueeze(1) & slot_valid.unsqueeze(2)
+        eye = torch.eye(slot_count, dtype=torch.bool, device=device).unsqueeze(0)
+        pair_valid = pair_valid & ~eye
+        if bool(pair_valid.any().item()):
+            separation = pairwise[pair_valid].mean()
+            min_pair = pairwise.masked_fill(~pair_valid, float("inf")).amin(dim=(1, 2))
+            collapse = (min_pair <= threshold).to(dtype).mean()
+        else:
+            separation = zero
+            collapse = zero
+    else:
+        separation = zero
+        collapse = zero
+    used_count = (occupancy > float(cfg.object_slot_salience_threshold)).to(dtype).sum(dim=1).mean()
+
+    metrics = {
+        "count": torch.tensor(float(slot_count), dtype=dtype, device=device),
+        "valid_fraction": valid_fraction,
+        "used_count": used_count,
+        "occupancy_entropy": entropy.mean() if entropy.numel() else zero,
+        "separation": separation,
+        "collapse_fraction": collapse,
+        "target_position_error": target_error,
+        "target_recall": target_recall,
+        "distractor_position_error": distractor_error,
+        "distractor_recall": distractor_recall,
+        "pair_position_error": torch.stack(pair_errors).mean() if pair_errors else zero,
+        "assignment_object_file_id_usage": zero,
+        "assignment_object_id_usage": zero,
+    }
+    metrics.update(recoverability)
+    return metrics
+
+
+def _slot_ternary_metrics(slot_ternary: torch.Tensor, slot_valid: torch.Tensor) -> dict[str, torch.Tensor]:
+    dtype = slot_ternary.dtype
+    device = slot_ternary.device
+    zero = torch.zeros((), dtype=dtype, device=device)
+    if slot_ternary.numel() == 0 or slot_valid.numel() == 0:
+        return {
+            "ternary_zero_fraction": zero,
+            "ternary_nonzero_fraction": zero,
+            "ternary_positive_fraction": zero,
+            "ternary_negative_fraction": zero,
+            "ternary_axis_usage_count": zero,
+            "ternary_axis_usage_fraction": zero,
+            "ternary_always_on_axis_fraction": zero,
+        }
+    valid = slot_valid.reshape(-1).to(device=device, dtype=torch.bool)
+    ternary = slot_ternary.reshape(valid.shape[0], -1)[valid]
+    if ternary.numel() == 0:
+        return {
+            "ternary_zero_fraction": zero,
+            "ternary_nonzero_fraction": zero,
+            "ternary_positive_fraction": zero,
+            "ternary_negative_fraction": zero,
+            "ternary_axis_usage_count": zero,
+            "ternary_axis_usage_fraction": zero,
+            "ternary_always_on_axis_fraction": zero,
+        }
+    signs = ternary.sign()
+    axis_nonzero = (signs != 0).to(dtype).mean(dim=0)
+    return {
+        "ternary_zero_fraction": (signs == 0).to(dtype).mean(),
+        "ternary_nonzero_fraction": (signs != 0).to(dtype).mean(),
+        "ternary_positive_fraction": (signs > 0).to(dtype).mean(),
+        "ternary_negative_fraction": (signs < 0).to(dtype).mean(),
+        "ternary_axis_usage_count": axis_nonzero.gt(0).to(dtype).sum(),
+        "ternary_axis_usage_fraction": axis_nonzero.gt(0).to(dtype).mean(),
+        "ternary_always_on_axis_fraction": axis_nonzero.ge(0.95).to(dtype).mean(),
+    }
+
+
 def _candidate_path_context_metrics(
     diagnostics: dict[str, torch.Tensor],
     reference: torch.Tensor,
@@ -635,6 +820,7 @@ class Self(nn.Module):
         self.sae = SAE(self.cfg)
         self.contexts = ContextRouter(self.cfg)
         self.defs = DefinitionBank(self.cfg)
+        self.object_slots = ObjectSlotReadout(self.cfg)
         gate_input = _active_file_gate_input_dim(self.cfg)
         gate_hidden = max(16, self.cfg.definitions_per_context * 2)
         self.active_file_gate = nn.Sequential(
@@ -1807,6 +1993,48 @@ class Self(nn.Module):
                                 scale=float(max(1, self.cfg.image_size)),
                             ),
                         ))
+                        if self.cfg.object_slot_count > 0:
+                            slot_output = self.object_slots(image_tp1[reappeared_active])
+                            distractor_position = (
+                                batch["distractor_position_tp1"].to(device=image_t.device, dtype=image_t.dtype)[
+                                    reappeared_active
+                                ]
+                                if "distractor_position_tp1" in batch
+                                else None
+                            )
+                            diagnostics.update(_prefix_metrics(
+                                "reappeared_object_slot_",
+                                _object_slot_position_metrics(
+                                    slot_output.state.to(image_t.dtype),
+                                    slot_output.position.to(image_t.dtype),
+                                    slot_output.occupancy.to(image_t.dtype),
+                                    slot_output.valid,
+                                    target_position_for_reappeared,
+                                    distractor_position,
+                                    self.cfg,
+                                ),
+                            ))
+                            if self.cfg.object_slot_ternary_diagnostics and slot_output.local_images.numel() > 0:
+                                slot_count = slot_output.local_images.shape[1]
+                                flat_slots = slot_output.local_images.reshape(
+                                    -1,
+                                    image_tp1.shape[1],
+                                    image_tp1.shape[2],
+                                    image_tp1.shape[3],
+                                )
+                                slot_dataset_id = (
+                                    target_dataset_id.repeat_interleave(slot_count)
+                                    if target_dataset_id is not None
+                                    else None
+                                )
+                                slot_ternary = self._diagnostic_ternary_for_image(
+                                    flat_slots,
+                                    dataset_id=slot_dataset_id,
+                                ).view(slot_output.local_images.shape[0], slot_count, -1)
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_object_slot_",
+                                    _slot_ternary_metrics(slot_ternary.to(image_t.dtype), slot_output.valid),
+                                ))
                     oracle_position_candidates = None
                     predicted_position_candidates = None
                     feature_only_candidates = None

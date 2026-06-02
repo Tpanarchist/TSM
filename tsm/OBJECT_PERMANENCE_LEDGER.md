@@ -485,3 +485,51 @@ Latest held-out checkpoint:
 - ternary nonzero fraction: `0.227`
 
 This is a scoped partial result. The audit clears the immediate `object_file_id` bind-time leakage concern. Learned dynamics still improves reappearance position over naive projection, and the best checkpoint shows local prediction-error binding can beat feature-only in the contested stream. But full-state prediction error collapses to the feature-only floor, local prediction error is unstable across checkpoints, position recoverability remains negative in the contested two-object representation, and the occluded Definition bridge is absent. The current mechanism does not solve same-instance reappearance binding. The next target is a true slot-aware/local object representation that preserves object-specific geometry before the prediction-error competition, not more similarity pressure or governance.
+
+## Object-Local Slot Recoverability Gate
+
+Run: `runs/20260601_214941_temporal_objects_contested_position`
+
+Config: `configs/temporal_objects_contested_position.yaml`
+
+This patch adds object-local slots as continuous percept carriers, then reads sparse ternary Definition state from each slot-local image. Slot assignment is salience/locality based and uses no `object_id` or `object_file_id`. Ground-truth target/distractor positions are used only after slot discovery to score recoverability.
+
+Best held-out checkpoint:
+
+- object_file_id bind-time audit pass / candidate filter usage: `1.000` / `0.000`
+- slot count / valid fraction / used count: `2.000` / `1.000` / `2.000`
+- slot occupancy entropy: `0.999`
+- slot separation / collapse fraction: `0.457` / `0.000`
+- target position error / recall: `0.009` / `1.000`
+- distractor position error / recall: `0.009` / `1.000`
+- pair position error: `0.009`
+- slot position R2 / improvement: `1.000` / `+0.252`
+- slot assignment object_file_id/object_id usage: `0.000` / `0.000`
+- slot ternary nonzero fraction / axis usage: `0.135` / `5.000`
+- scene-level Definition position R2: `-0.318`
+- scene-level file-query position R2: `-0.317`
+- predicted-position exact match: `0.315`
+- feature-only exact match: `0.079`
+- active local prediction-error exact match: `0.000`
+- occluded bridge: `0.000`
+
+Latest held-out checkpoint:
+
+- object_file_id bind-time audit pass / candidate filter usage: `1.000` / `0.000`
+- slot count / valid fraction / used count: `2.000` / `1.000` / `2.000`
+- slot occupancy entropy: `0.999`
+- slot separation / collapse fraction: `0.457` / `0.000`
+- target position error / recall: `0.009` / `1.000`
+- distractor position error / recall: `0.009` / `1.000`
+- pair position error: `0.009`
+- slot position R2 / improvement: `1.000` / `+0.252`
+- slot assignment object_file_id/object_id usage: `0.000` / `0.000`
+- slot ternary nonzero fraction / axis usage: `0.119` / `6.000`
+- scene-level Definition position R2: `-0.311`
+- scene-level file-query position R2: `-0.308`
+- predicted-position exact match: `0.298`
+- feature-only exact match: `0.079`
+- active local prediction-error exact match: `0.000`
+- occluded bridge: `0.000`
+
+This clears the slot recoverability gate. The contested frame can now be decomposed into two object-local percept carriers without label assignment, and the slot carriers recover both target and distractor geometry with essentially perfect held-out R2. The sparse ternary slot readout is live but not dense. This is not yet an object-permanence win: object-file binding and the occluded Definition bridge are still unsolved. The next step is to make object files compete against slots, not whole-scene query states: each live file predicts an expected slot state/position, each visible slot supplies local evidence, and binding is decided by lowest joint file-to-slot prediction error.

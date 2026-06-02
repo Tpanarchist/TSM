@@ -72,3 +72,9 @@ model:
   learned_active_file_gate_detach_inputs: true
   learned_active_file_gate_context_features: true
   learned_active_file_gate_expectation_features: true
+  object_slot_count: 2
+  object_slot_sigma: 2.8
+  object_slot_nms_radius: 5.0
+  object_slot_salience_threshold: 0.05
+  object_slot_match_radius: 4.0
+  object_slot_ternary_diagnostics: true
