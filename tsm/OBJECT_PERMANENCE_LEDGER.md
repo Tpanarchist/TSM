@@ -24,7 +24,8 @@ This ledger records the current experimental status of the temporal object-conti
 18. Four-object same-class local binding: partial; learned dynamics beats ballistic but p90 endpoint error exceeds spacing.
 19. Global same-class file retrieval: not yet; likely related to the same density/candidate-count curve.
 20. Object-file expectation predicts its own future Definition state: partial, still weak.
-21. Full exact object permanence: not yet.
+21. Runtime confidence can expose endpoint error: partial; works on easier 2/3-object conditions but fails at the 4-object load wall.
+22. Full exact object permanence: not yet.
 
 ## Current Claim
 
@@ -997,3 +998,47 @@ Current fork:
 - Probe A passes as an appraisal diagnostic: four-object wrong binds mostly become correct declines.
 - The next runtime step should be calibrated uncertainty / neutral binding, not immediate hard Definition splitting.
 - Definition splitting or new distinction creation becomes appropriate after the model can expose an internal uncertainty estimate rather than using measured endpoint error as the probe's oracle-side proxy.
+
+## Probe A-prime Stage 1: Runtime Confidence Calibration
+
+Diagnostic added:
+
+- `reappeared_dynamics_runtime_confidence_*`
+
+This is still not a runtime decline policy. It tests whether runtime-available signals can predict actual endpoint error before using a neutral bind decision. The confidence path uses:
+
+- predicted dynamics endpoint.
+- visible slot geometry and slot salience.
+- object-file confidence and age.
+- optional learned-vs-ballistic endpoint disagreement.
+
+Scoring uses true future positions and file labels only after the runtime signals are computed. The confidence-path audit reports zero usage for:
+
+- true future position.
+- measured endpoint error.
+- object id.
+- object-file id.
+- sequence id.
+
+Held-out/test summary:
+
+| condition | set bind | Probe A correct decline | runtime uncertainty/error Pearson | runtime uncertainty/error Spearman | naive margin/error Pearson | runtime confidence mean | confidence drop on correct declines |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 2-object curved | 1.000 | 0.000 | 0.933 | 0.911 | 0.925 | 0.735 | n/a |
+| 3-object curved | 1.000 | 0.167 | 0.749 | 0.757 | 0.845 | 0.729 | 0.057 |
+| 4-object curved | 0.250 | 0.500 | 0.087 | 0.130 | 0.142 | 0.704 | 0.019 |
+| 4-object wide | 0.167 | 0.604 | -0.091 | -0.163 | 0.007 | 0.695 | -0.010 |
+
+All confidence-path leakage audit metrics are `0.000` in the four evaluated conditions.
+
+Interpretation:
+
+Stage 1 is a partial negative result. Runtime geometry/confidence signals correlate with actual endpoint error in the easier two- and three-object conditions, and mean confidence drops mildly as object count rises. But the signal fails exactly where it is needed: under four-object load, the internal uncertainty estimate barely correlates with actual endpoint error, and in the wide four-object condition it is slightly anticorrelated. The naive margin-only baseline fails there too.
+
+The key failure is not that neutral appraisal is wrong. Probe A still shows that many four-object forced errors are correct declines under an oracle-side endpoint-error band. The failure is that the current runtime signals do not know when they are inside that band.
+
+Current fork:
+
+- Do not implement Stage 2 runtime decline from this confidence score.
+- Do not implement Definition splitting yet.
+- The next useful patch should create a better internal uncertainty source for the trajectory endpoint itself, such as a learned variance/error head, ensemble/dropout disagreement, or per-slot trajectory residual calibration, then rerun Probe A-prime before using neutral as a policy.

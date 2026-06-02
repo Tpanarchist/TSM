@@ -18,6 +18,7 @@ from tsm.self_field import (
     _all_track_file_slot_assignment_metrics,
     _all_track_neutral_file_slot_metrics,
     _all_track_predicted_file_slot_metrics,
+    _all_track_runtime_confidence_metrics,
     _file_slot_assignment_metrics,
     _local_reappearance_images,
     _oracle_error_shape_file_slot_metrics,
@@ -501,6 +502,36 @@ def test_all_track_neutral_file_slot_metrics_buckets_deadband_decisions():
     assert metrics["assignment_object_file_id_usage"].item() == 0.0
 
 
+def test_all_track_runtime_confidence_reports_error_calibration_without_label_leakage():
+    cfg = TsmConfig(image_size=16, object_slot_count=3)
+    metrics = _all_track_runtime_confidence_metrics(
+        predicted_positions=torch.tensor([[0.1, 0.0], [4.5, 0.0], [5.9, 0.0]]),
+        predicted_valid=torch.tensor([True, True, True]),
+        file_instance_labels=torch.tensor([10, 11, 12], dtype=torch.long),
+        slot_positions=torch.tensor([[[0.0, 0.0], [4.0, 0.0], [8.0, 0.0]]]),
+        slot_valid=torch.tensor([[True, True, True]]),
+        slot_occupancy=torch.tensor([[0.95, 0.70, 0.35]]),
+        file_confidence=torch.tensor([[1.0], [0.7], [0.2]]),
+        file_age=torch.tensor([[0.0], [2.0], [7.0]]),
+        all_positions=torch.tensor([[[0.0, 0.0], [4.0, 0.0], [8.0, 0.0]]]),
+        all_instance_labels=torch.tensor([[10, 11, 12]], dtype=torch.long),
+        cfg=cfg,
+        reference_positions=torch.tensor([[0.0, 0.0], [4.1, 0.0], [8.0, 0.0]]),
+        reference_valid=torch.tensor([True, True, True]),
+    )
+
+    assert metrics["object_count"].item() == 3.0
+    assert metrics["decision_coverage_fraction"].item() == 1.0
+    assert metrics["runtime_uncertainty_error_pearson"].item() > 0.5
+    assert metrics["runtime_uncertainty_error_spearman"].item() > 0.5
+    assert metrics["runtime_confidence_drop_on_correct_declines"].item() > 0.0
+    assert metrics["confidence_true_position_usage"].item() == 0.0
+    assert metrics["confidence_endpoint_error_usage"].item() == 0.0
+    assert metrics["confidence_object_file_id_usage"].item() == 0.0
+    assert metrics["confidence_object_id_usage"].item() == 0.0
+    assert metrics["confidence_sequence_id_usage"].item() == 0.0
+
+
 def test_all_track_endpoint_spacing_metrics_reports_error_budget():
     cfg = TsmConfig(image_size=16, object_slot_count=3)
     metrics = _all_track_endpoint_spacing_metrics(
@@ -827,6 +858,20 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_dynamics_neutral_all_file_slot_confident_wrong_bind_fraction",
         "reappeared_dynamics_neutral_all_file_slot_correct_decline_fraction",
         "reappeared_dynamics_neutral_all_file_slot_wrong_decline_fraction",
+        "reappeared_dynamics_runtime_confidence_object_count",
+        "reappeared_dynamics_runtime_confidence_decision_coverage_fraction",
+        "reappeared_dynamics_runtime_confidence_actual_endpoint_error_mean",
+        "reappeared_dynamics_runtime_confidence_actual_endpoint_error_p90",
+        "reappeared_dynamics_runtime_confidence_runtime_uncertainty_mean",
+        "reappeared_dynamics_runtime_confidence_runtime_confidence_mean",
+        "reappeared_dynamics_runtime_confidence_runtime_uncertainty_error_pearson",
+        "reappeared_dynamics_runtime_confidence_runtime_uncertainty_error_spearman",
+        "reappeared_dynamics_runtime_confidence_naive_margin_uncertainty_error_pearson",
+        "reappeared_dynamics_runtime_confidence_runtime_confidence_correct_decline_mean",
+        "reappeared_dynamics_runtime_confidence_runtime_confidence_drop_on_correct_declines",
+        "reappeared_dynamics_runtime_confidence_confidence_true_position_usage",
+        "reappeared_dynamics_runtime_confidence_confidence_endpoint_error_usage",
+        "reappeared_dynamics_runtime_confidence_confidence_object_file_id_usage",
         "reappeared_ballistic_endpoint_pair_distance_ratio",
         "reappeared_ballistic_endpoint_error_p95",
         "reappeared_ballistic_local_file_slot_target_match_accuracy",

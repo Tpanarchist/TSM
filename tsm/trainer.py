@@ -460,6 +460,23 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                                 handle.write(f"- final_{summary_name}_confident_accuracy: {last_metrics[f'{metric_prefix}confident_accuracy']:.3f}\n")
                                 handle.write(f"- final_{summary_name}_assignment_object_file_id_usage: {last_metrics[f'{metric_prefix}assignment_object_file_id_usage']:.1f}\n")
                                 handle.write(f"- final_{summary_name}_assignment_object_id_usage: {last_metrics[f'{metric_prefix}assignment_object_id_usage']:.1f}\n")
+                        calibration_prefix = "reappeared_dynamics_runtime_confidence_"
+                        if f"{calibration_prefix}runtime_uncertainty_error_pearson" in last_metrics:
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_object_count: {last_metrics[f'{calibration_prefix}object_count']:.1f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_decision_coverage_fraction: {last_metrics[f'{calibration_prefix}decision_coverage_fraction']:.3f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_actual_endpoint_error_mean: {last_metrics[f'{calibration_prefix}actual_endpoint_error_mean']:.6f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_actual_endpoint_error_p90: {last_metrics[f'{calibration_prefix}actual_endpoint_error_p90']:.6f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_runtime_uncertainty_mean: {last_metrics[f'{calibration_prefix}runtime_uncertainty_mean']:.6f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_runtime_confidence_mean: {last_metrics[f'{calibration_prefix}runtime_confidence_mean']:.6f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_uncertainty_error_pearson: {last_metrics[f'{calibration_prefix}runtime_uncertainty_error_pearson']:.3f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_uncertainty_error_spearman: {last_metrics[f'{calibration_prefix}runtime_uncertainty_error_spearman']:.3f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_naive_uncertainty_error_pearson: {last_metrics[f'{calibration_prefix}naive_margin_uncertainty_error_pearson']:.3f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_correct_decline_confidence: {last_metrics[f'{calibration_prefix}runtime_confidence_correct_decline_mean']:.6f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_forced_correct_confidence: {last_metrics[f'{calibration_prefix}runtime_confidence_forced_correct_mean']:.6f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_drop_on_correct_declines: {last_metrics[f'{calibration_prefix}runtime_confidence_drop_on_correct_declines']:.6f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_true_position_usage: {last_metrics[f'{calibration_prefix}confidence_true_position_usage']:.1f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_endpoint_error_usage: {last_metrics[f'{calibration_prefix}confidence_endpoint_error_usage']:.1f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_object_file_id_usage: {last_metrics[f'{calibration_prefix}confidence_object_file_id_usage']:.1f}\n")
                         for noise_px in (0, 1, 2, 3, 4, 6, 7, 8):
                             noise_prefix = f"reappeared_oracle_noise_file_slot_noise_{noise_px}px_"
                             target_key = f"{noise_prefix}target_match_accuracy"

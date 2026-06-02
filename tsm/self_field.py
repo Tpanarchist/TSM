@@ -1412,6 +1412,289 @@ def _all_track_neutral_file_slot_metrics(
     }
 
 
+def _all_track_runtime_confidence_metrics(
+    predicted_positions: torch.Tensor,
+    predicted_valid: torch.Tensor,
+    file_instance_labels: torch.Tensor,
+    slot_positions: torch.Tensor,
+    slot_valid: torch.Tensor,
+    slot_occupancy: torch.Tensor,
+    file_confidence: torch.Tensor,
+    file_age: torch.Tensor,
+    all_positions: torch.Tensor,
+    all_instance_labels: torch.Tensor,
+    cfg: TsmConfig,
+    reference_positions: torch.Tensor | None = None,
+    reference_valid: torch.Tensor | None = None,
+) -> dict[str, torch.Tensor]:
+    dtype = predicted_positions.dtype if predicted_positions.is_floating_point() else torch.float32
+    device = predicted_positions.device
+    zero = torch.zeros((), dtype=dtype, device=device)
+    empty = {
+        "object_count": zero,
+        "decision_coverage_fraction": zero,
+        "actual_endpoint_error_mean": zero,
+        "actual_endpoint_error_p90": zero,
+        "runtime_uncertainty_mean": zero,
+        "runtime_confidence_mean": zero,
+        "naive_margin_uncertainty_mean": zero,
+        "naive_margin_confidence_mean": zero,
+        "nearest_distance_mean": zero,
+        "reference_disagreement_mean": zero,
+        "runtime_uncertainty_error_pearson": zero,
+        "runtime_uncertainty_error_spearman": zero,
+        "naive_margin_uncertainty_error_pearson": zero,
+        "naive_margin_uncertainty_error_spearman": zero,
+        "nearest_distance_error_pearson": zero,
+        "nearest_distance_error_spearman": zero,
+        "reference_disagreement_error_pearson": zero,
+        "reference_disagreement_error_spearman": zero,
+        "slot_confidence_error_pearson": zero,
+        "file_confidence_error_pearson": zero,
+        "file_age_error_pearson": zero,
+        "probe_correct_decline_fraction": zero,
+        "probe_wrong_decline_fraction": zero,
+        "runtime_uncertainty_correct_decline_mean": zero,
+        "runtime_uncertainty_wrong_decline_mean": zero,
+        "runtime_uncertainty_forced_correct_mean": zero,
+        "runtime_uncertainty_forced_wrong_mean": zero,
+        "runtime_confidence_correct_decline_mean": zero,
+        "runtime_confidence_wrong_decline_mean": zero,
+        "runtime_confidence_forced_correct_mean": zero,
+        "runtime_confidence_forced_wrong_mean": zero,
+        "runtime_confidence_drop_on_correct_declines": zero,
+        "naive_confidence_drop_on_correct_declines": zero,
+        "confidence_true_position_usage": zero,
+        "confidence_endpoint_error_usage": zero,
+        "confidence_object_id_usage": zero,
+        "confidence_object_file_id_usage": zero,
+        "confidence_sequence_id_usage": zero,
+    }
+    if (
+        predicted_positions.numel() == 0
+        or predicted_valid.numel() == 0
+        or file_instance_labels.numel() == 0
+        or slot_positions.numel() == 0
+        or slot_valid.numel() == 0
+        or all_positions.numel() == 0
+        or all_instance_labels.numel() == 0
+    ):
+        return empty
+
+    file_count = min(predicted_positions.shape[0], predicted_valid.shape[0], file_instance_labels.shape[0])
+    query_count = min(slot_positions.shape[0], slot_valid.shape[0], all_positions.shape[0], all_instance_labels.shape[0])
+    object_count = all_instance_labels.shape[1] if all_instance_labels.dim() >= 2 else 0
+    if file_count == 0 or query_count == 0 or object_count <= 0:
+        out = dict(empty)
+        out["object_count"] = torch.tensor(float(object_count), dtype=dtype, device=device)
+        return out
+
+    predicted_positions = predicted_positions[:file_count].to(device=device, dtype=dtype)
+    predicted_valid = predicted_valid[:file_count].to(device=device, dtype=torch.bool)
+    file_instance_labels = file_instance_labels[:file_count].to(device=device, dtype=torch.long)
+    slot_positions = slot_positions[:query_count].to(device=device, dtype=dtype)
+    slot_valid = slot_valid[:query_count].to(device=device, dtype=torch.bool)
+    if slot_occupancy.numel() > 0:
+        slot_occupancy = slot_occupancy[:query_count].to(device=device, dtype=dtype)
+    else:
+        slot_occupancy = torch.zeros(slot_valid.shape, dtype=dtype, device=device)
+    if file_confidence.numel() > 0:
+        file_confidence = file_confidence[:file_count].reshape(file_count, -1)[:, 0].to(device=device, dtype=dtype)
+    else:
+        file_confidence = torch.zeros((file_count,), dtype=dtype, device=device)
+    if file_age.numel() > 0:
+        file_age = file_age[:file_count].reshape(file_count, -1)[:, 0].to(device=device, dtype=dtype)
+    else:
+        file_age = torch.zeros((file_count,), dtype=dtype, device=device)
+    all_positions = all_positions[:query_count].to(device=device, dtype=dtype)
+    all_instance_labels = all_instance_labels[:query_count].to(device=device, dtype=torch.long)
+    if reference_positions is not None and reference_positions.numel() > 0:
+        reference_positions = reference_positions[:file_count].to(device=device, dtype=dtype)
+    else:
+        reference_positions = None
+    if reference_valid is not None and reference_valid.numel() > 0:
+        reference_valid = reference_valid[:file_count].to(device=device, dtype=torch.bool)
+    else:
+        reference_valid = None
+
+    scale = float(max(1, cfg.image_size))
+    age_scale = float(max(1.0, cfg.active_file_candidate_max_age))
+    actual_errors: list[torch.Tensor] = []
+    runtime_uncertainties: list[torch.Tensor] = []
+    runtime_confidences: list[torch.Tensor] = []
+    naive_uncertainties: list[torch.Tensor] = []
+    naive_confidences: list[torch.Tensor] = []
+    nearest_distances: list[torch.Tensor] = []
+    reference_disagreements: list[torch.Tensor] = []
+    slot_confidences: list[torch.Tensor] = []
+    file_confidences: list[torch.Tensor] = []
+    file_ages: list[torch.Tensor] = []
+    forced_correct: list[torch.Tensor] = []
+    forced_wrong: list[torch.Tensor] = []
+    correct_declines: list[torch.Tensor] = []
+    wrong_declines: list[torch.Tensor] = []
+
+    for row in range(query_count):
+        valid_slots = torch.nonzero(slot_valid[row], as_tuple=False).flatten()
+        if valid_slots.numel() < max(2, object_count):
+            continue
+        true_positions = all_positions[row, :object_count]
+        true_distances = torch.cdist(true_positions, slot_positions[row, valid_slots]) / scale
+
+        best_true_error = torch.tensor(float("inf"), dtype=dtype, device=device)
+        true_object_to_slot: dict[int, int] = {}
+        for slot_order in permutations(range(int(valid_slots.numel())), object_count):
+            total = zero
+            for object_idx, slot_local in enumerate(slot_order):
+                total = total + true_distances[object_idx, slot_local]
+            if bool((total < best_true_error).item()):
+                best_true_error = total
+                true_object_to_slot = {
+                    object_idx: int(valid_slots[slot_local].item())
+                    for object_idx, slot_local in enumerate(slot_order)
+                }
+        if not true_object_to_slot:
+            continue
+
+        for object_idx in range(object_count):
+            label = all_instance_labels[row, object_idx]
+            matches = torch.nonzero(file_instance_labels == label, as_tuple=False).flatten()
+            if matches.numel() == 0:
+                continue
+            file_idx = int(matches[0].item())
+            if not bool(predicted_valid[file_idx].item()):
+                continue
+
+            # Runtime confidence signals stop here: predicted endpoint, slot geometry,
+            # slot salience, file confidence/age, and optional internal reference
+            # disagreement. True positions and labels below are scoring-only.
+            file_distances = torch.cdist(
+                predicted_positions[file_idx].view(1, 2),
+                slot_positions[row, valid_slots],
+            ).flatten() / scale
+            if file_distances.numel() < 2:
+                continue
+            sorted_distances, sorted_local = file_distances.sort()
+            nearest_slot = int(valid_slots[sorted_local[0]].item())
+            second_distance = sorted_distances[1]
+            nearest_distance = sorted_distances[0]
+            margin = (second_distance - nearest_distance).clamp_min(0.0)
+            relative_margin = (margin / second_distance.clamp_min(1e-6)).clamp(0.0, 1.0)
+            naive_uncertainty = (1.0 - relative_margin).clamp(0.0, 1.0)
+            naive_confidence = relative_margin
+            nearest_slot_confidence = slot_occupancy[row, nearest_slot].clamp(0.0, 1.0)
+            current_file_confidence = file_confidence[file_idx].clamp(0.0, 1.0)
+            age_norm = (torch.log1p(file_age[file_idx].clamp_min(0.0)) / age_scale).clamp(0.0, 1.0)
+            if (
+                reference_positions is not None
+                and reference_valid is not None
+                and bool(reference_valid[file_idx].item())
+            ):
+                reference_disagreement = (
+                    predicted_positions[file_idx] - reference_positions[file_idx]
+                ).norm() / scale
+            else:
+                reference_disagreement = zero
+            reference_disagreement = reference_disagreement.clamp_min(0.0)
+            runtime_uncertainty = (
+                0.35 * naive_uncertainty
+                + 0.20 * nearest_distance.clamp(0.0, 1.0)
+                + 0.15 * (1.0 - nearest_slot_confidence)
+                + 0.15 * (1.0 - current_file_confidence)
+                + 0.10 * age_norm
+                + 0.25 * reference_disagreement.clamp(0.0, 1.0)
+            )
+            runtime_confidence = 1.0 / (1.0 + runtime_uncertainty.clamp_min(0.0))
+
+            true_slot = true_object_to_slot.get(object_idx)
+            if true_slot is None:
+                continue
+            actual_error = (predicted_positions[file_idx] - true_positions[object_idx]).norm() / scale
+            should_decline = margin <= actual_error
+            is_correct = nearest_slot == true_slot
+
+            actual_errors.append(actual_error)
+            runtime_uncertainties.append(runtime_uncertainty)
+            runtime_confidences.append(runtime_confidence)
+            naive_uncertainties.append(naive_uncertainty)
+            naive_confidences.append(naive_confidence)
+            nearest_distances.append(nearest_distance)
+            reference_disagreements.append(reference_disagreement)
+            slot_confidences.append(nearest_slot_confidence)
+            file_confidences.append(current_file_confidence)
+            file_ages.append(age_norm)
+            forced_correct.append(torch.tensor(float(is_correct), dtype=dtype, device=device))
+            forced_wrong.append(torch.tensor(float(not is_correct), dtype=dtype, device=device))
+            correct_declines.append(torch.tensor(float(bool(should_decline.item()) and (not is_correct)), dtype=dtype, device=device))
+            wrong_declines.append(torch.tensor(float(bool(should_decline.item()) and is_correct), dtype=dtype, device=device))
+
+    if not actual_errors:
+        out = dict(empty)
+        out["object_count"] = torch.tensor(float(object_count), dtype=dtype, device=device)
+        return out
+
+    error_tensor = torch.stack(actual_errors)
+    uncertainty_tensor = torch.stack(runtime_uncertainties)
+    confidence_tensor = torch.stack(runtime_confidences)
+    naive_uncertainty_tensor = torch.stack(naive_uncertainties)
+    naive_confidence_tensor = torch.stack(naive_confidences)
+    nearest_tensor = torch.stack(nearest_distances)
+    reference_tensor = torch.stack(reference_disagreements)
+    slot_confidence_tensor = torch.stack(slot_confidences)
+    file_confidence_tensor = torch.stack(file_confidences)
+    file_age_tensor = torch.stack(file_ages)
+    forced_correct_tensor = torch.stack(forced_correct).to(dtype)
+    forced_wrong_tensor = torch.stack(forced_wrong).to(dtype)
+    correct_decline_tensor = torch.stack(correct_declines).to(dtype)
+    wrong_decline_tensor = torch.stack(wrong_declines).to(dtype)
+
+    expected_decisions = float(max(1, query_count * object_count))
+    forced_correct_mean = _masked_mean(confidence_tensor, forced_correct_tensor.bool(), dtype)
+    correct_decline_confidence = _masked_mean(confidence_tensor, correct_decline_tensor.bool(), dtype)
+    naive_forced_correct_mean = _masked_mean(naive_confidence_tensor, forced_correct_tensor.bool(), dtype)
+    naive_correct_decline_confidence = _masked_mean(naive_confidence_tensor, correct_decline_tensor.bool(), dtype)
+    return {
+        "object_count": torch.tensor(float(object_count), dtype=dtype, device=device),
+        "decision_coverage_fraction": torch.tensor(float(error_tensor.numel()) / expected_decisions, dtype=dtype, device=device),
+        "actual_endpoint_error_mean": error_tensor.mean(),
+        "actual_endpoint_error_p90": _quantile_or_zero(error_tensor, 0.90, zero),
+        "runtime_uncertainty_mean": uncertainty_tensor.mean(),
+        "runtime_confidence_mean": confidence_tensor.mean(),
+        "naive_margin_uncertainty_mean": naive_uncertainty_tensor.mean(),
+        "naive_margin_confidence_mean": naive_confidence_tensor.mean(),
+        "nearest_distance_mean": nearest_tensor.mean(),
+        "reference_disagreement_mean": reference_tensor.mean(),
+        "runtime_uncertainty_error_pearson": _pearson_or_zero(uncertainty_tensor, error_tensor, zero),
+        "runtime_uncertainty_error_spearman": _spearman_or_zero(uncertainty_tensor, error_tensor, zero),
+        "naive_margin_uncertainty_error_pearson": _pearson_or_zero(naive_uncertainty_tensor, error_tensor, zero),
+        "naive_margin_uncertainty_error_spearman": _spearman_or_zero(naive_uncertainty_tensor, error_tensor, zero),
+        "nearest_distance_error_pearson": _pearson_or_zero(nearest_tensor, error_tensor, zero),
+        "nearest_distance_error_spearman": _spearman_or_zero(nearest_tensor, error_tensor, zero),
+        "reference_disagreement_error_pearson": _pearson_or_zero(reference_tensor, error_tensor, zero),
+        "reference_disagreement_error_spearman": _spearman_or_zero(reference_tensor, error_tensor, zero),
+        "slot_confidence_error_pearson": _pearson_or_zero(slot_confidence_tensor, error_tensor, zero),
+        "file_confidence_error_pearson": _pearson_or_zero(file_confidence_tensor, error_tensor, zero),
+        "file_age_error_pearson": _pearson_or_zero(file_age_tensor, error_tensor, zero),
+        "probe_correct_decline_fraction": correct_decline_tensor.mean(),
+        "probe_wrong_decline_fraction": wrong_decline_tensor.mean(),
+        "runtime_uncertainty_correct_decline_mean": _masked_mean(uncertainty_tensor, correct_decline_tensor.bool(), dtype),
+        "runtime_uncertainty_wrong_decline_mean": _masked_mean(uncertainty_tensor, wrong_decline_tensor.bool(), dtype),
+        "runtime_uncertainty_forced_correct_mean": _masked_mean(uncertainty_tensor, forced_correct_tensor.bool(), dtype),
+        "runtime_uncertainty_forced_wrong_mean": _masked_mean(uncertainty_tensor, forced_wrong_tensor.bool(), dtype),
+        "runtime_confidence_correct_decline_mean": correct_decline_confidence,
+        "runtime_confidence_wrong_decline_mean": _masked_mean(confidence_tensor, wrong_decline_tensor.bool(), dtype),
+        "runtime_confidence_forced_correct_mean": forced_correct_mean,
+        "runtime_confidence_forced_wrong_mean": _masked_mean(confidence_tensor, forced_wrong_tensor.bool(), dtype),
+        "runtime_confidence_drop_on_correct_declines": forced_correct_mean - correct_decline_confidence,
+        "naive_confidence_drop_on_correct_declines": naive_forced_correct_mean - naive_correct_decline_confidence,
+        "confidence_true_position_usage": zero,
+        "confidence_endpoint_error_usage": zero,
+        "confidence_object_id_usage": zero,
+        "confidence_object_file_id_usage": zero,
+        "confidence_sequence_id_usage": zero,
+    }
+
+
 def _all_track_endpoint_spacing_metrics(
     predicted_positions: torch.Tensor,
     predicted_valid: torch.Tensor,
@@ -1933,6 +2216,21 @@ def _pearson_or_zero(left: torch.Tensor, right: torch.Tensor, zero: torch.Tensor
     if bool((denom <= 1e-8).item()):
         return zero
     return (left_centered * right_centered).sum() / denom
+
+
+def _rank_1d(values: torch.Tensor) -> torch.Tensor:
+    if values.numel() == 0:
+        return values
+    order = values.reshape(-1).argsort()
+    ranks = torch.empty_like(order, dtype=values.dtype)
+    ranks[order] = torch.arange(values.numel(), dtype=values.dtype, device=values.device)
+    return ranks
+
+
+def _spearman_or_zero(left: torch.Tensor, right: torch.Tensor, zero: torch.Tensor) -> torch.Tensor:
+    if left.numel() < 2 or right.numel() < 2:
+        return zero
+    return _pearson_or_zero(_rank_1d(left), _rank_1d(right), zero)
 
 
 def _paired_endpoint_error_structure_metrics(
@@ -3828,6 +4126,28 @@ class Self(nn.Module):
                                         all_positions_for_reappeared,
                                         all_file_ids_for_reappeared,
                                         self.cfg,
+                                    ),
+                                ))
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_dynamics_runtime_confidence_",
+                                    _all_track_runtime_confidence_metrics(
+                                        dynamics_position.detach().to(image_t.dtype),
+                                        file_slot_valid,
+                                        source_sequences,
+                                        slot_output.position.to(image_t.dtype),
+                                        slot_output.valid,
+                                        slot_output.occupancy.to(image_t.dtype),
+                                        memory_read.confidence[reappeared_active].detach().to(image_t.dtype),
+                                        memory_read.age[reappeared_active].detach().to(image_t.dtype),
+                                        all_positions_for_reappeared,
+                                        all_file_ids_for_reappeared,
+                                        self.cfg,
+                                        reference_positions=(
+                                            ballistic_position.detach().to(image_t.dtype)
+                                            if ballistic_position is not None
+                                            else None
+                                        ),
+                                        reference_valid=ballistic_valid if ballistic_valid is not None else None,
                                     ),
                                 ))
                                 diagnostics.update(_prefix_metrics(
