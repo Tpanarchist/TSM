@@ -360,6 +360,9 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                         handle.write(f"- final_reappeared_file_slot_assignment_object_id_usage: {last_metrics['reappeared_file_slot_assignment_object_id_usage']:.1f}\n")
                         handle.write(f"- final_reappeared_file_slot_assignment_sequence_id_usage: {last_metrics['reappeared_file_slot_assignment_sequence_id_usage']:.1f}\n")
                         for summary_name, metric_prefix in (
+                            ("reappeared_oracle_position_global_file_slot", "reappeared_oracle_position_global_file_slot_"),
+                            ("reappeared_oracle_position_ceiling_file_slot", "reappeared_oracle_position_ceiling_file_slot_"),
+                            ("reappeared_oracle_position_file_slot", "reappeared_oracle_position_file_slot_"),
                             ("reappeared_active_file_slot", "reappeared_active_file_slot_"),
                             ("reappeared_predicted_position_file_slot", "reappeared_predicted_position_file_slot_"),
                             ("reappeared_feature_only_file_slot", "reappeared_feature_only_file_slot_"),

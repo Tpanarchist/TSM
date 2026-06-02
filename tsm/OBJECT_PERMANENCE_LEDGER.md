@@ -570,4 +570,40 @@ Latest held-out checkpoint:
 - learned-active file-slot target / hard / distractor / pair: `0.119` / `0.119` / `0.119` / `0.000`
 - occluded bridge: `0.000`
 
-This is a clean negative/partial result. The generator is separable and the slot interface is no longer the bottleneck. Predicted-position gating improves over the global/feature-only floor, but only weakly: target recall reaches about `0.247`, exact/hard binding only `0.119`, pair binding only `0.030`, and the occluded Definition bridge remains absent. The failure has moved from visible object localization to active-file identity continuity. Position-only trajectory assignment is not enough; the next mechanism needs a better live-file candidate state and a file-to-slot prediction-error representation that includes local appearance/trajectory/context, not position alone.
+This is a clean negative/partial result. The generator is separable and the slot interface is no longer the bottleneck. Predicted-position gating improves over the global/feature-only floor, but only weakly: target recall reaches about `0.247`, exact/hard binding only `0.119`, pair binding only `0.030`, and the occluded Definition bridge remains absent. The failure has moved from visible object localization to active-file identity continuity. The position signal is present, but current dynamics precision is too low relative to same-class object spacing. The next discriminator is an oracle-position ceiling test: if perfect endpoints bind cleanly, sharpen dynamics; if they do not, fix assignment logic.
+
+## Oracle-Position File-to-Slot Ceiling
+
+Run evaluated: `runs/20260602_064540_temporal_objects_contested_position`
+
+Config: `configs/temporal_objects_contested_position.yaml`
+
+This diagnostic uses the true reappearance endpoint as if it were the file's predicted endpoint, then runs the same position-error assignment against recovered slots. Identity labels are still not used by the assignment. Three variants are reported:
+
+- oracle local ceiling: per row, only the target endpoint and same-class distractor endpoint are provided as the live file set.
+- oracle global: all batch file endpoints are available, exposing duplicate-position/global-candidate ambiguity.
+- oracle mask: true endpoints plus the existing oracle-shaped candidate mask.
+
+Best held-out checkpoint:
+
+- slot pair position error / slot R2: `0.009` / `1.000`
+- dynamics position error / improvement / valid fraction: `0.234` / `+0.162` / `1.000`
+- oracle local ceiling target / hard / distractor / pair: `1.000` / `1.000` / `1.000` / `1.000`
+- oracle local candidates / target recall / distractor recall / assignment error: `2.000` / `1.000` / `1.000` / `0.009`
+- oracle global target / hard / distractor / pair: `0.446` / `0.446` / `0.446` / `0.262`
+- oracle mask target / hard / distractor / pair: `0.446` / `0.446` / `0.315` / `0.131`
+- predicted-position target / hard / distractor / pair: `0.119` / `0.119` / `0.109` / `0.030`
+- assignment audit object_file_id/object_id/sequence usage: `0.000` / `0.000` / `0.000`
+
+Latest held-out checkpoint:
+
+- slot pair position error / slot R2: `0.009` / `1.000`
+- dynamics position error / improvement / valid fraction: `0.232` / `+0.165` / `1.000`
+- oracle local ceiling target / hard / distractor / pair: `1.000` / `1.000` / `1.000` / `1.000`
+- oracle local candidates / target recall / distractor recall / assignment error: `2.000` / `1.000` / `1.000` / `0.009`
+- oracle global target / hard / distractor / pair: `0.446` / `0.446` / `0.446` / `0.262`
+- oracle mask target / hard / distractor / pair: `0.446` / `0.446` / `0.315` / `0.131`
+- predicted-position target / hard / distractor / pair: `0.119` / `0.119` / `0.109` / `0.030`
+- assignment audit object_file_id/object_id/sequence usage: `0.000` / `0.000` / `0.000`
+
+This separates mechanism failure from dynamics-precision failure. With perfect local endpoints, file-to-slot assignment works completely. With learned dynamics endpoints, it fails because the endpoint estimate is still too blurry: normalized error around `0.232-0.234` is about `6.5` px on a `28x28` frame, roughly half the true `12.806` px inter-object spacing. The next target is not richer appearance or context; it is a sharper trajectory endpoint predictor and/or a live-file candidate state that preserves the local two-file set without identity-label help.

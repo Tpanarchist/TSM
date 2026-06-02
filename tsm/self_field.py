@@ -957,6 +957,96 @@ def _file_slot_assignment_metrics(
     }
 
 
+def _oracle_pair_file_slot_ceiling_metrics(
+    slot_positions: torch.Tensor,
+    slot_valid: torch.Tensor,
+    target_positions: torch.Tensor,
+    target_instance_labels: torch.Tensor,
+    group_labels: torch.Tensor,
+    cfg: TsmConfig,
+    distractor_positions: torch.Tensor | None,
+    distractor_instance_labels: torch.Tensor | None,
+) -> dict[str, torch.Tensor]:
+    dtype = slot_positions.dtype
+    device = slot_positions.device
+    zero = torch.zeros((), dtype=dtype, device=device)
+    if (
+        distractor_positions is None
+        or distractor_instance_labels is None
+        or distractor_positions.numel() == 0
+        or distractor_instance_labels.numel() == 0
+    ):
+        return {
+            "target_match_accuracy": zero,
+            "target_hard_match_accuracy": zero,
+            "distractor_match_accuracy": zero,
+            "pair_match_accuracy": zero,
+            "candidate_mean_count": zero,
+            "row_coverage_fraction": zero,
+            "target_file_recall_fraction": zero,
+            "distractor_file_recall_fraction": zero,
+            "assignment_position_error": zero,
+            "target_assignment_position_error": zero,
+            "distractor_assignment_position_error": zero,
+            "assignment_object_file_id_usage": zero,
+            "assignment_object_id_usage": zero,
+            "assignment_sequence_id_usage": zero,
+        }
+
+    query_count = min(
+        slot_positions.shape[0],
+        slot_valid.shape[0],
+        target_positions.shape[0],
+        target_instance_labels.shape[0],
+        distractor_positions.shape[0],
+        distractor_instance_labels.shape[0],
+        group_labels.shape[0],
+    )
+    if query_count == 0:
+        return {
+            "target_match_accuracy": zero,
+            "target_hard_match_accuracy": zero,
+            "distractor_match_accuracy": zero,
+            "pair_match_accuracy": zero,
+            "candidate_mean_count": zero,
+            "row_coverage_fraction": zero,
+            "target_file_recall_fraction": zero,
+            "distractor_file_recall_fraction": zero,
+            "assignment_position_error": zero,
+            "target_assignment_position_error": zero,
+            "distractor_assignment_position_error": zero,
+            "assignment_object_file_id_usage": zero,
+            "assignment_object_id_usage": zero,
+            "assignment_sequence_id_usage": zero,
+        }
+
+    collected: dict[str, list[torch.Tensor]] = {}
+    for row in range(query_count):
+        row_file_positions = torch.stack((target_positions[row], distractor_positions[row]), dim=0)
+        row_file_labels = torch.stack((target_instance_labels[row], distractor_instance_labels[row]), dim=0)
+        row_group_labels = group_labels[row].view(1).expand(2)
+        row_metrics = _file_slot_assignment_metrics(
+            row_file_positions,
+            torch.ones(2, dtype=torch.bool, device=device),
+            slot_positions[row:row + 1],
+            slot_valid[row:row + 1],
+            target_positions[row:row + 1],
+            row_file_labels,
+            target_instance_labels[row:row + 1],
+            row_group_labels,
+            cfg,
+            distractor_positions=distractor_positions[row:row + 1],
+            distractor_instance_labels=distractor_instance_labels[row:row + 1],
+        )
+        for key, value in row_metrics.items():
+            collected.setdefault(key, []).append(value)
+
+    return {
+        key: torch.stack(values).mean() if values else zero
+        for key, values in collected.items()
+    }
+
+
 def _candidate_path_context_metrics(
     diagnostics: dict[str, torch.Tensor],
     reference: torch.Tensor,
@@ -2357,29 +2447,73 @@ class Self(nn.Module):
                                 "reappeared_file_slot_",
                                 _candidate_path_context_metrics(diagnostics, image_t),
                             ))
-                            file_slot_candidate_paths: list[tuple[str, torch.Tensor]] = []
+                            diagnostics.update(_prefix_metrics(
+                                "reappeared_oracle_position_global_file_slot_",
+                                _file_slot_assignment_metrics(
+                                    target_position_for_reappeared.detach().to(image_t.dtype),
+                                    file_slot_valid,
+                                    slot_output.position.to(image_t.dtype),
+                                    slot_output.valid,
+                                    target_position_for_reappeared,
+                                    source_sequences,
+                                    source_sequences,
+                                    source_labels,
+                                    self.cfg,
+                                    distractor_positions=slot_distractor_position,
+                                    distractor_instance_labels=distractor_sequences,
+                                ),
+                            ))
+                            diagnostics.update(_prefix_metrics(
+                                "reappeared_oracle_position_global_file_slot_",
+                                _candidate_path_context_metrics(diagnostics, image_t),
+                            ))
+                            diagnostics.update(_prefix_metrics(
+                                "reappeared_oracle_position_ceiling_file_slot_",
+                                _oracle_pair_file_slot_ceiling_metrics(
+                                    slot_output.position.to(image_t.dtype),
+                                    slot_output.valid,
+                                    target_position_for_reappeared,
+                                    source_sequences,
+                                    source_labels,
+                                    self.cfg,
+                                    slot_distractor_position,
+                                    distractor_sequences,
+                                ),
+                            ))
+                            diagnostics.update(_prefix_metrics(
+                                "reappeared_oracle_position_ceiling_file_slot_",
+                                _candidate_path_context_metrics(diagnostics, image_t),
+                            ))
+                            file_slot_candidate_paths: list[tuple[str, torch.Tensor, torch.Tensor]] = []
                             if active_candidates is not None:
-                                file_slot_candidate_paths.append(("reappeared_active_file_slot_", active_candidates))
+                                file_slot_candidate_paths.append((
+                                    "reappeared_active_file_slot_",
+                                    dynamics_position.detach().to(image_t.dtype),
+                                    active_candidates,
+                                ))
                             if oracle_position_candidates is not None:
                                 file_slot_candidate_paths.append((
                                     "reappeared_oracle_position_file_slot_",
+                                    target_position_for_reappeared.detach().to(image_t.dtype),
                                     oracle_position_candidates,
                                 ))
                             if predicted_position_candidates is not None:
                                 file_slot_candidate_paths.append((
                                     "reappeared_predicted_position_file_slot_",
+                                    dynamics_position.detach().to(image_t.dtype),
                                     predicted_position_candidates,
                                 ))
                             if feature_only_candidates is not None:
                                 file_slot_candidate_paths.append((
                                     "reappeared_feature_only_file_slot_",
+                                    dynamics_position.detach().to(image_t.dtype),
                                     feature_only_candidates,
                                 ))
-                            for file_slot_prefix, file_slot_candidates in file_slot_candidate_paths:
+                            for file_slot_prefix, file_slot_positions, file_slot_candidates in file_slot_candidate_paths:
                                 diagnostics.update(_prefix_metrics(
                                     file_slot_prefix,
                                     _file_slot_assignment_metrics(
-                                        dynamics_position.detach().to(image_t.dtype),
+                                        file_slot_positions,
                                         file_slot_valid,
                                         slot_output.position.to(image_t.dtype),
                                         slot_output.valid,
