@@ -335,6 +335,21 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                         handle.write(f"- final_reappeared_dynamics_endpoint_paired_error_cosine: {last_metrics['reappeared_dynamics_endpoint_paired_error_cosine']:.3f}\n")
                         handle.write(f"- final_reappeared_dynamics_endpoint_error_x_correlation: {last_metrics['reappeared_dynamics_endpoint_paired_error_x_correlation']:.3f}\n")
                         handle.write(f"- final_reappeared_dynamics_endpoint_error_y_correlation: {last_metrics['reappeared_dynamics_endpoint_paired_error_y_correlation']:.3f}\n")
+                    for summary_name, metric_prefix in (
+                        ("reappeared_dynamics_all_endpoint", "reappeared_dynamics_all_endpoint_"),
+                        ("reappeared_ballistic_all_endpoint", "reappeared_ballistic_all_endpoint_"),
+                    ):
+                        spacing_key = f"{metric_prefix}min_interobject_spacing"
+                        if spacing_key in last_metrics:
+                            handle.write(f"- final_{summary_name}_object_count: {last_metrics[f'{metric_prefix}object_count']:.1f}\n")
+                            handle.write(f"- final_{summary_name}_valid_row_fraction: {last_metrics[f'{metric_prefix}valid_row_fraction']:.3f}\n")
+                            handle.write(f"- final_{summary_name}_min_interobject_spacing: {last_metrics[spacing_key]:.6f}\n")
+                            handle.write(f"- final_{summary_name}_min_interobject_spacing_px: {last_metrics[f'{metric_prefix}min_interobject_spacing_px']:.3f}\n")
+                            handle.write(f"- final_{summary_name}_endpoint_error_mean: {last_metrics[f'{metric_prefix}endpoint_error_mean']:.6f}\n")
+                            handle.write(f"- final_{summary_name}_endpoint_error_median: {last_metrics[f'{metric_prefix}endpoint_error_median']:.6f}\n")
+                            handle.write(f"- final_{summary_name}_endpoint_error_p90: {last_metrics[f'{metric_prefix}endpoint_error_p90']:.6f}\n")
+                            handle.write(f"- final_{summary_name}_endpoint_error_to_spacing_ratio: {last_metrics[f'{metric_prefix}endpoint_error_to_spacing_ratio']:.3f}\n")
+                            handle.write(f"- final_{summary_name}_endpoint_p90_to_spacing_ratio: {last_metrics[f'{metric_prefix}endpoint_p90_to_spacing_ratio']:.3f}\n")
                     if "reappeared_definition_position_linear_error" in last_metrics:
                         handle.write(f"- final_reappeared_definition_position_linear_error: {last_metrics['reappeared_definition_position_linear_error']:.6f}\n")
                         handle.write(f"- final_reappeared_definition_position_linear_improvement: {last_metrics['reappeared_definition_position_linear_improvement']:.6f}\n")

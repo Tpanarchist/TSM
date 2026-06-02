@@ -13,6 +13,7 @@ from tsm.self_field import (
     _active_file_feature_only_candidate_mask,
     _active_file_gate_input_dim,
     _active_file_gate_logits,
+    _all_track_endpoint_spacing_metrics,
     _all_track_file_slot_assignment_metrics,
     _all_track_predicted_file_slot_metrics,
     _file_slot_assignment_metrics,
@@ -472,6 +473,24 @@ def test_all_track_predicted_file_slot_metrics_gathers_scene_files():
     assert metrics["candidate_mean_count"].item() == 3.0
 
 
+def test_all_track_endpoint_spacing_metrics_reports_error_budget():
+    cfg = TsmConfig(image_size=16, object_slot_count=3)
+    metrics = _all_track_endpoint_spacing_metrics(
+        predicted_positions=torch.tensor([[2.0, 4.0], [12.0, 10.0], [8.0, 4.0], [1.0, 1.0]]),
+        predicted_valid=torch.tensor([True, True, True, True]),
+        file_instance_labels=torch.tensor([10, 12, 11, 99], dtype=torch.long),
+        all_positions=torch.tensor([[[2.0, 4.0], [8.0, 4.0], [12.0, 10.0]]]),
+        all_instance_labels=torch.tensor([[10, 11, 12]], dtype=torch.long),
+        cfg=cfg,
+    )
+
+    assert metrics["object_count"].item() == 3.0
+    assert metrics["valid_row_fraction"].item() == 1.0
+    assert metrics["min_interobject_spacing_px"].item() == 6.0
+    assert metrics["endpoint_error_mean"].item() == 0.0
+    assert metrics["endpoint_error_to_spacing_ratio"].item() == 0.0
+
+
 def test_active_file_ballistic_position_uses_phase_elapsed_with_wrap():
     cfg = TsmConfig(image_size=28, active_file_expectation_phase_count=5, active_file_candidate_wrap=True)
     memory = Memory()
@@ -734,12 +753,23 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_dynamics_all_file_slot_target_match_accuracy",
         "reappeared_dynamics_all_file_slot_set_match_accuracy",
         "reappeared_dynamics_all_file_slot_row_coverage_fraction",
+        "reappeared_dynamics_all_endpoint_object_count",
+        "reappeared_dynamics_all_endpoint_valid_row_fraction",
+        "reappeared_dynamics_all_endpoint_min_interobject_spacing",
+        "reappeared_dynamics_all_endpoint_min_interobject_spacing_px",
+        "reappeared_dynamics_all_endpoint_endpoint_error_mean",
+        "reappeared_dynamics_all_endpoint_endpoint_error_median",
+        "reappeared_dynamics_all_endpoint_endpoint_error_p90",
+        "reappeared_dynamics_all_endpoint_endpoint_error_to_spacing_ratio",
         "reappeared_ballistic_endpoint_pair_distance_ratio",
         "reappeared_ballistic_endpoint_error_p95",
         "reappeared_ballistic_local_file_slot_target_match_accuracy",
         "reappeared_ballistic_local_file_slot_pair_match_accuracy",
         "reappeared_ballistic_all_file_slot_object_match_accuracy",
         "reappeared_ballistic_all_file_slot_set_match_accuracy",
+        "reappeared_ballistic_all_endpoint_endpoint_error_mean",
+        "reappeared_ballistic_all_endpoint_endpoint_error_p90",
+        "reappeared_ballistic_all_endpoint_endpoint_error_to_spacing_ratio",
         "reappeared_oracle_all_file_slot_object_match_accuracy",
         "reappeared_oracle_all_file_slot_set_match_accuracy",
         "reappeared_oracle_error_shape_file_slot_center_bias_target_match_accuracy",

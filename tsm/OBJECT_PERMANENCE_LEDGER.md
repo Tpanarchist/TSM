@@ -21,18 +21,18 @@ This ledger records the current experimental status of the temporal object-conti
 15. Position channels are load-bearing inside feature-only binding: yes, under ablation control.
 16. Binding representations preserve recoverable position: yes for object-local slots; partial for scene/global binding states.
 17. Same-class contested local file-to-slot continuity: passed for 2 objects across seeds and initial-pass for 3 objects.
-18. Four-object same-class local binding: partial; learned dynamics beats ballistic but full-set assignment is load-fragile.
-19. Global same-class file retrieval: not yet.
+18. Four-object same-class local binding: partial; learned dynamics beats ballistic but p90 endpoint error exceeds spacing.
+19. Global same-class file retrieval: not yet; likely related to the same density/candidate-count curve.
 20. Object-file expectation predicts its own future Definition state: partial, still weak.
 21. Full exact object permanence: not yet.
 
 ## Current Claim
 
-TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance in the original single-target stream. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. Object-local slots solve the visible same-class scene-mush problem in the contested stream. Oracle endpoint binding proves the slot assignment logic is correct, and the curved contested stream proves learned trajectory dynamics can beat hand ballistic motion and recover perfect local file-to-slot binding for two objects across seeds and for an initial three-object count sweep. Four-object local binding is partial rather than solved. Full object permanence is still not solved because global same-class file retrieval and live candidate-set control remain weak.
+TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance in the original single-target stream. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. Object-local slots solve the visible same-class scene-mush problem in the contested stream. Oracle endpoint binding proves the slot assignment logic is correct, and the curved contested stream proves learned trajectory dynamics can beat hand ballistic motion and recover perfect local file-to-slot binding for two objects across seeds and for an initial three-object count sweep. Four-object local binding is partial rather than solved; spacing-vs-error diagnostics show learned p90 endpoint error exceeds the four-object spacing budget. Full object permanence is still not solved because global same-class file retrieval and live candidate-set control remain weak.
 
 ## Next Target
 
-The next mechanism should focus on binding under load and live candidate-set / memory-index control. Local slots, local assignment, and learned trajectory dynamics work under the curved contested gate through three objects, but four-object local set binding degrades and global retrieval remains weak. The system must keep the relevant competing object files live without object-label help, then run the validated local file-to-slot binding inside that live set. Do not add governance, action, or broad similarity heads before fixing this candidate/load problem.
+The next mechanism should focus on binding under load after separating density from logic. Local slots, local assignment, and learned trajectory dynamics work under the curved contested gate through three objects, but four-object local set binding degrades once endpoint error approaches or exceeds inter-object spacing. First test a wider-frame or wider-spacing four-object variant; if that passes, the current failure is density/precision. If it still fails, the candidate/load mechanism itself needs repair. Do not add governance, action, or broad similarity heads before fixing this candidate/load problem.
 
 ## Active Candidate-Gating Result
 
@@ -806,3 +806,37 @@ Current interpretation:
 Next target:
 
 Improve binding under load before claiming general local permanence. The likely next mechanism is not broader cognition; it is a local live-set/assignment improvement that preserves the validated slot and trajectory dynamics while handling four competing same-class files. Candidate-set control and assignment should be evaluated together because the four-object failure resembles a scaled version of the global retrieval problem.
+
+## Curved Spacing-Vs-Error Diagnostic
+
+Runs evaluated:
+
+- `runs/20260602_115937_temporal_objects_contested_curved`
+- `runs/20260602_125952_temporal_objects_contested_curved_3`
+- `runs/20260602_130402_temporal_objects_contested_curved_4`
+
+This diagnostic adds all-track endpoint spacing metrics:
+
+- minimum inter-object reappearance spacing.
+- learned endpoint error mean / median / p90.
+- ballistic endpoint error mean / median / p90.
+- slot localization error.
+- oracle, ballistic, and learned all-set binding.
+
+Held-out/test summary:
+
+| objects | min spacing px | learned mean | learned median | learned p90 | learned p90 / spacing | ballistic mean | ballistic p90 | slot err | oracle all-set | learned all-set |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 14.142 | 0.163 | 0.179 | 0.291 | 0.576 | 0.416 | 0.662 | 0.009 | 1.000 | 1.000 |
+| 3 | 8.694 | 0.131 | 0.112 | 0.231 | 0.745 | 0.424 | 0.602 | 0.015 | 1.000 | 1.000 |
+| 4 | 8.623 | 0.207 | 0.191 | 0.388 | 1.259 | 0.432 | 0.668 | 0.016 | 1.000 | 0.258 |
+
+Interpretation:
+
+The four-object failure is not a slot failure and not an assignment bug: slot localization remains tight, slot R2 remains near `0.999`, and oracle all-set assignment stays `1.000`. It is also not just "global retrieval" as a separate subsystem. The four-object local problem enters the same candidate-density regime: minimum spacing is about `8.6 px`, while learned p90 endpoint error is about `0.388` normalized, or `10.9 px`, which exceeds the local spacing budget. In the two- and three-object cases, learned p90 error remains below the spacing budget and local binding succeeds.
+
+Current fork:
+
+- If the frame is kept at `28x28`, the next target is endpoint precision / load robustness for four same-class tracks.
+- If the goal is to test candidate-count logic independently of density, add a wider-frame or wider-spacing four-object variant first.
+- Global `0.000` is now plausibly the far end of this same density/candidate-count curve, not necessarily a separate failure mode.

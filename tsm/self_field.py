@@ -1242,6 +1242,117 @@ def _all_track_predicted_file_slot_metrics(
     )
 
 
+def _all_track_endpoint_spacing_metrics(
+    predicted_positions: torch.Tensor,
+    predicted_valid: torch.Tensor,
+    file_instance_labels: torch.Tensor,
+    all_positions: torch.Tensor,
+    all_instance_labels: torch.Tensor,
+    cfg: TsmConfig,
+) -> dict[str, torch.Tensor]:
+    dtype = predicted_positions.dtype if predicted_positions.is_floating_point() else torch.float32
+    device = predicted_positions.device
+    zero = torch.zeros((), dtype=dtype, device=device)
+    if (
+        predicted_positions.numel() == 0
+        or predicted_valid.numel() == 0
+        or file_instance_labels.numel() == 0
+        or all_positions.numel() == 0
+        or all_instance_labels.numel() == 0
+    ):
+        return {
+            "object_count": zero,
+            "valid_row_fraction": zero,
+            "min_interobject_spacing": zero,
+            "min_interobject_spacing_px": zero,
+            "absolute_min_interobject_spacing": zero,
+            "mean_interobject_spacing": zero,
+            "endpoint_error_mean": zero,
+            "endpoint_error_median": zero,
+            "endpoint_error_p90": zero,
+            "endpoint_error_p95": zero,
+            "endpoint_error_max": zero,
+            "endpoint_error_to_spacing_ratio": zero,
+            "endpoint_p90_to_spacing_ratio": zero,
+        }
+
+    file_count = min(predicted_positions.shape[0], predicted_valid.shape[0], file_instance_labels.shape[0])
+    query_count = min(all_positions.shape[0], all_instance_labels.shape[0])
+    object_count = all_instance_labels.shape[1] if all_instance_labels.dim() >= 2 else 0
+    if file_count == 0 or query_count == 0 or object_count <= 1:
+        return {
+            "object_count": torch.tensor(float(object_count), dtype=dtype, device=device),
+            "valid_row_fraction": zero,
+            "min_interobject_spacing": zero,
+            "min_interobject_spacing_px": zero,
+            "absolute_min_interobject_spacing": zero,
+            "mean_interobject_spacing": zero,
+            "endpoint_error_mean": zero,
+            "endpoint_error_median": zero,
+            "endpoint_error_p90": zero,
+            "endpoint_error_p95": zero,
+            "endpoint_error_max": zero,
+            "endpoint_error_to_spacing_ratio": zero,
+            "endpoint_p90_to_spacing_ratio": zero,
+        }
+
+    predicted_positions = predicted_positions[:file_count].to(device=device, dtype=dtype)
+    predicted_valid = predicted_valid[:file_count].to(device=device, dtype=torch.bool)
+    file_instance_labels = file_instance_labels[:file_count].to(device=device, dtype=torch.long)
+    all_positions = all_positions[:query_count].to(device=device, dtype=dtype)
+    all_instance_labels = all_instance_labels[:query_count].to(device=device, dtype=torch.long)
+    scale = float(max(1, cfg.image_size))
+    min_spacings: list[torch.Tensor] = []
+    mean_spacings: list[torch.Tensor] = []
+    endpoint_errors: list[torch.Tensor] = []
+    valid_rows = 0
+    for row in range(query_count):
+        row_predictions = []
+        row_valid = []
+        for object_idx in range(object_count):
+            matches = torch.nonzero(file_instance_labels == all_instance_labels[row, object_idx], as_tuple=False).flatten()
+            if matches.numel() == 0:
+                row_valid.append(False)
+                row_predictions.append(torch.zeros(2, dtype=dtype, device=device))
+                continue
+            file_idx = matches[0]
+            row_valid.append(bool(predicted_valid[file_idx].item()))
+            row_predictions.append(predicted_positions[file_idx])
+        if not all(row_valid):
+            continue
+        true_positions = all_positions[row, :object_count]
+        predicted = torch.stack(row_predictions)
+        pairwise = torch.cdist(true_positions.unsqueeze(0), true_positions.unsqueeze(0)).squeeze(0) / scale
+        eye = torch.eye(object_count, dtype=torch.bool, device=device)
+        pair_values = pairwise.masked_select(~eye)
+        if pair_values.numel() == 0:
+            continue
+        errors = (predicted - true_positions).norm(dim=-1) / scale
+        valid_rows += 1
+        min_spacings.append(pair_values.min())
+        mean_spacings.append(pair_values.mean())
+        endpoint_errors.append(errors)
+
+    all_errors = torch.cat(endpoint_errors) if endpoint_errors else torch.empty(0, dtype=dtype, device=device)
+    min_spacing_mean = _mean_or_zero(min_spacings, zero)
+    endpoint_p90 = _quantile_or_zero(all_errors, 0.90, zero)
+    return {
+        "object_count": torch.tensor(float(object_count), dtype=dtype, device=device),
+        "valid_row_fraction": torch.tensor(float(valid_rows) / float(max(1, query_count)), dtype=dtype, device=device),
+        "min_interobject_spacing": min_spacing_mean,
+        "min_interobject_spacing_px": min_spacing_mean * scale,
+        "absolute_min_interobject_spacing": torch.stack(min_spacings).min() if min_spacings else zero,
+        "mean_interobject_spacing": _mean_or_zero(mean_spacings, zero),
+        "endpoint_error_mean": all_errors.mean() if all_errors.numel() > 0 else zero,
+        "endpoint_error_median": _quantile_or_zero(all_errors, 0.50, zero),
+        "endpoint_error_p90": endpoint_p90,
+        "endpoint_error_p95": _quantile_or_zero(all_errors, 0.95, zero),
+        "endpoint_error_max": all_errors.max() if all_errors.numel() > 0 else zero,
+        "endpoint_error_to_spacing_ratio": (all_errors.mean() / min_spacing_mean.clamp_min(1e-6)) if all_errors.numel() > 0 else zero,
+        "endpoint_p90_to_spacing_ratio": endpoint_p90 / min_spacing_mean.clamp_min(1e-6),
+    }
+
+
 def _oracle_pair_file_slot_ceiling_metrics(
     slot_positions: torch.Tensor,
     slot_valid: torch.Tensor,
@@ -3363,6 +3474,17 @@ class Self(nn.Module):
                                         self.cfg,
                                     ),
                                 ))
+                                diagnostics.update(_prefix_metrics(
+                                    "reappeared_dynamics_all_endpoint_",
+                                    _all_track_endpoint_spacing_metrics(
+                                        dynamics_position.detach().to(image_t.dtype),
+                                        file_slot_valid,
+                                        source_sequences,
+                                        all_positions_for_reappeared,
+                                        all_file_ids_for_reappeared,
+                                        self.cfg,
+                                    ),
+                                ))
                             diagnostics.update(_prefix_metrics(
                                 "reappeared_oracle_position_global_file_slot_",
                                 _file_slot_assignment_metrics(
@@ -3512,6 +3634,17 @@ class Self(nn.Module):
                                             slot_output.position.to(image_t.dtype),
                                             slot_output.valid,
                                             source_sequences,
+                                            source_sequences,
+                                            all_positions_for_reappeared,
+                                            all_file_ids_for_reappeared,
+                                            self.cfg,
+                                        ),
+                                    ))
+                                    diagnostics.update(_prefix_metrics(
+                                        "reappeared_ballistic_all_endpoint_",
+                                        _all_track_endpoint_spacing_metrics(
+                                            ballistic_position.detach().to(image_t.dtype),
+                                            ballistic_file_slot_valid,
                                             source_sequences,
                                             all_positions_for_reappeared,
                                             all_file_ids_for_reappeared,
