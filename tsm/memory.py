@@ -74,7 +74,7 @@ class Memory:
         phase = torch.zeros(bsz, 1, dtype=dtype, device=device)
         phase_valid = torch.zeros(bsz, dtype=torch.bool, device=device)
 
-        if "sequence_id" not in batch or "visible_t" not in batch:
+        if ("sequence_id" not in batch and "object_file_id" not in batch) or "visible_t" not in batch:
             return ObjectMemoryRead(
                 memory_feature,
                 confidence,
@@ -89,7 +89,10 @@ class Memory:
                 phase_valid,
             )
 
-        sequence_ids = batch["sequence_id"].detach().cpu().to(torch.long)
+        key_ids = batch.get("object_file_id", batch.get("sequence_id"))
+        if key_ids is None:
+            raise KeyError("object memory requires sequence_id or object_file_id")
+        key_ids = key_ids.detach().cpu().to(torch.long)
         visible = batch["visible_t"].detach().cpu().to(torch.float32)
         positions = batch.get("object_position_t")
         positions_cpu = positions.detach().cpu().to(torch.float32) if torch.is_tensor(positions) else None
@@ -97,7 +100,7 @@ class Memory:
         phases_cpu = phases.detach().cpu().to(torch.long) if torch.is_tensor(phases) else None
         detached_feature = feature.detach().cpu()
         for row in range(bsz):
-            key = int(sequence_ids[row].item())
+            key = int(key_ids[row].item())
             stored = self.object_files.get(key)
             if stored is not None:
                 object_age = max(0, step - stored.last_step)

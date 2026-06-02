@@ -2,7 +2,13 @@ from PIL import Image
 import torch
 
 from tsm.config import DatasetConfig, TsmConfig
-from tsm.data import ImageStreamDataset, MultiModeSyntheticImageStreamDataset, TemporalObjectPermanenceDataset, make_dataset
+from tsm.data import (
+    ContestedTemporalObjectPermanenceDataset,
+    ImageStreamDataset,
+    MultiModeSyntheticImageStreamDataset,
+    TemporalObjectPermanenceDataset,
+    make_dataset,
+)
 
 
 def test_image_stream_dataset_uses_mock_rows_without_network():
@@ -61,9 +67,40 @@ def test_temporal_object_dataset_exposes_occlusion_phases():
     assert ds.sequential
 
 
+def test_contested_temporal_object_dataset_exposes_two_target_tracks():
+    cfg = TsmConfig(d_model=16, image_size=28, image_channels=1)
+    ds = ContestedTemporalObjectPermanenceDataset(cfg, length=12, seed=13)
+
+    phases = [ds[i]["phase"].item() for i in range(6)]
+    tracks = [ds[i]["track_id"].item() for i in range(6)]
+    file_ids = [ds[i]["object_file_id"].item() for i in range(2)]
+
+    assert phases == [0, 0, 1, 1, 2, 2]
+    assert tracks == [0, 1, 0, 1, 0, 1]
+    assert file_ids == [0, 1]
+    assert ds[0]["sequence_id"].item() == ds[1]["sequence_id"].item()
+    assert ds[0]["object_id"].item() == ds[1]["object_id"].item()
+    assert ds[6]["occluded_t"].item() == 1.0
+    assert ds[8]["visible_tp1"].item() == 1.0
+    assert ds[8]["same_class_contested"].item() == 1.0
+    assert ds[0]["image_t"].shape == (1, 28, 28)
+    assert ds.sequential
+
+
 def test_make_dataset_supports_temporal_object_alias():
     cfg = TsmConfig(d_model=16, image_size=28, image_channels=1)
     ds = make_dataset(DatasetConfig(name="object_permanence", split="train", limit=7, seed=3), cfg)
 
     assert isinstance(ds, TemporalObjectPermanenceDataset)
+    assert len(ds) == 7
+
+
+def test_make_dataset_supports_contested_temporal_object_alias():
+    cfg = TsmConfig(d_model=16, image_size=28, image_channels=1)
+    ds = make_dataset(
+        DatasetConfig(name="temporal_objects_contested_position", split="train", limit=7, seed=3),
+        cfg,
+    )
+
+    assert isinstance(ds, ContestedTemporalObjectPermanenceDataset)
     assert len(ds) == 7

@@ -20,16 +20,17 @@ This ledger records the current experimental status of the temporal object-conti
 14. Predicted reappearance position is load-bearing for explicit candidate masking: no.
 15. Position channels are load-bearing inside feature-only binding: yes, under ablation control.
 16. Binding representations preserve recoverable position: partial. Visible reappeared Definition/file-query binding features now preserve position; memory-conditioned source features remain weak.
-17. Object-file expectation predicts its own future Definition state: partial, still weak.
-18. Full exact object permanence: not yet.
+17. Same-class contested two-object continuity: failed initial test.
+18. Object-file expectation predicts its own future Definition state: partial, still weak.
+19. Full exact object permanence: not yet.
 
 ## Current Claim
 
-TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance, especially against hard same-class negatives. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. A learned active gate can recover part of that live set from Definition/file geometry and context without position input, but it is still weaker than the scaffold. Object files now carry scaffolded phase/trajectory state, and a learned dynamics head can predict reappearance position much better than the naive velocity projection. A position-aware binding interface exposes reappeared position in the visible Definition/file-query representations. Position ablation shows that feature-only binding is already using those coordinate channels, but explicit predicted-position masking still does not beat the full feature-only path. Full object permanence is still not solved because visible reappeared state does not bind cleanly back to the exact object file under global lookup.
+TSM now has object-file continuity signal that survives occlusion and distinguishes same-instance identity above chance in the original single-target stream. The active candidate scaffold can preserve the correct file in the live lookup set and improve constrained reappearance lookup. A learned active gate can recover part of that live set from Definition/file geometry and context without position input, but it is still weaker than the scaffold. Object files now carry scaffolded phase/trajectory state, and a learned dynamics head can predict reappearance position much better than the naive velocity projection. A position-aware binding interface exposes reappeared position in the visible Definition/file-query representations for the single-target stream. Position ablation shows that feature-only binding uses those coordinate channels there. The contested two-object stream breaks that partial win: visible binding position is no longer target-specific enough when two same-class objects are present. Full object permanence is still not solved because visible reappeared state does not bind cleanly back to the exact object file under contested global lookup.
 
 ## Next Target
 
-The next mechanism should first stabilize and characterize the partial geometry-through-feature win before adding a heavier prediction-error competition path. If that re-baseline holds, each active object file should then predict an expected reappearance state, the actual percept should arrive, and the file with the lowest local prediction error should own the reappearance. Do not add another expectation loss or broad similarity head before that control is understood.
+The next mechanism should be Probe 2: prediction-error competition over full expected reappearance state. Each active object file should predict an expected reappearance state, the actual percept should arrive, and the file with the lowest local prediction error should own the reappearance. Do not add another expectation loss, governance layer, or broad similarity head before testing this ownership mechanism.
 
 ## Active Candidate-Gating Result
 
@@ -397,3 +398,41 @@ Latest held-out checkpoint:
 - ternary nonzero fraction: `0.257`
 
 This resolves the ambiguity in the prior feature-only column. The position-aware feature-only path is not a pure non-geometric baseline: it is already using the coordinate channels, and removing them weakens both exact and hard same-class matching. The explicit predicted-position mask still fails, but geometry is now load-bearing through feature distance. The next step is to re-baseline and stabilize this partial win before building prediction-error competition.
+
+## Contested Two-Object Result
+
+Run: `runs/20260601_210546_temporal_objects_contested_position`
+
+Config: `configs/temporal_objects_contested_position.yaml`
+
+This run adds a target-centric same-class contested stream. Each scene has two same-shape object tracks. Each row selects one track as the target, occludes that target in the occlusion phases, and leaves the other track visible as a distractor. Memory uses `object_file_id`, so both tracks in the same scene maintain separate object files. Held-out evaluation confirms all rows are contested:
+
+- temporal same-class contested fraction: `1.000`
+
+Best held-out checkpoint:
+
+- full feature-only exact / hard match: `0.157` / `0.157`
+- position-ablated feature-only exact / hard match: `0.079` / `0.079`
+- predicted-position exact / hard match: `0.236` / `0.236`
+- oracle-position exact / hard match: `0.157` / `0.157`
+- row coverage / target recall: `1.000` / `1.000`
+- Definition position improvement / R2: `-0.065` / `-0.273`
+- file-query position improvement / R2: `-0.065` / `-0.271`
+- dynamics position error / improvement: `0.230` / `+0.169`
+- occluded bridge: `0.000`
+- ternary nonzero fraction: `0.110`
+
+Latest held-out checkpoint:
+
+- full feature-only exact / hard match: `0.157` / `0.157`
+- position-ablated feature-only exact / hard match: `0.079` / `0.079`
+- predicted-position exact / hard match: `0.236` / `0.236`
+- oracle-position exact / hard match: `0.157` / `0.157`
+- row coverage / target recall: `1.000` / `1.000`
+- Definition position improvement / R2: `-0.061` / `-0.252`
+- file-query position improvement / R2: `-0.062` / `-0.255`
+- dynamics position error / improvement: `0.227` / `+0.171`
+- occluded bridge: `0.000`
+- ternary nonzero fraction: `0.110`
+
+This is the intended discriminating failure. The single-target geometry-through-feature win does not survive same-class contested identity. Position channels still help slightly over ablated features, but position recoverability collapses because the visible binding position is a whole-image salience read over both objects, not a target-specific object slot. Explicit predicted-position masking is slightly better than full feature distance in this run, but still weak and not enough to solve contested same-instance rebinding. The next step is Probe 2: active object files must compete by prediction error against the percept, rather than relying on global feature distance or a whole-image position channel.

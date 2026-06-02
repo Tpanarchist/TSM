@@ -301,6 +301,63 @@ def _render_temporal_frame(
     return image.clamp(0.0, 1.0)
 
 
+def _contested_position(
+    model_cfg: TsmConfig,
+    scene_id: int,
+    track_id: int,
+    phase: int,
+    split: str,
+) -> tuple[int, int]:
+    h = model_cfg.image_size
+    margin = max(4, h // 7)
+    span = max(1, h - 2 * margin)
+    speed = 4 if _temporal_variant(split) == "heldout" else 3
+    base = (scene_id * 5) % span
+    y_base = ((scene_id % 4) * max(2, span // 6)) % span
+    if track_id == 0:
+        x = margin + ((base + phase * speed) % span)
+        y = margin + ((y_base + 2 + phase // 2) % span)
+    else:
+        x = margin + ((base + span // 2 - phase * speed) % span)
+        y = margin + ((y_base + max(6, span // 2) + phase // 2) % span)
+    return int(x), int(y)
+
+
+def _render_contested_frame(
+    model_cfg: TsmConfig,
+    scene_id: int,
+    target_track_id: int,
+    phase: int,
+    target_visible: bool,
+    target_occluded: bool,
+    split: str,
+) -> torch.Tensor:
+    c = model_cfg.image_channels
+    h = model_cfg.image_size
+    image = torch.full((c, h, h), 0.02)
+    object_id = 1
+    value = 0.62
+    for track_id in range(2):
+        x, y = _contested_position(model_cfg, scene_id, track_id, phase, split)
+        is_target = track_id == target_track_id
+        if is_target:
+            if phase == 1 and target_visible:
+                prev_x, prev_y = _contested_position(model_cfg, scene_id, track_id, max(0, phase - 1), split)
+                _draw_temporal_object(image, object_id, prev_x, prev_y, value * 0.35)
+            if phase == 2:
+                _draw_occluder(image, x + 2, y, split, opening=False)
+            if target_visible:
+                _draw_temporal_object(image, object_id, x, y, value)
+            if target_occluded:
+                _draw_occluder(image, x, y, split, opening=phase >= 4)
+        else:
+            if phase == 1:
+                prev_x, prev_y = _contested_position(model_cfg, scene_id, track_id, max(0, phase - 1), split)
+                _draw_temporal_object(image, object_id, prev_x, prev_y, value * 0.25)
+            _draw_temporal_object(image, object_id, x, y, value * 0.92)
+    return image.clamp(0.0, 1.0)
+
+
 class TemporalObjectPermanenceDataset(Dataset):
     """Temporal stream for object permanence before any embodied/game adapter."""
 
@@ -386,6 +443,99 @@ class TemporalObjectPermanenceDataset(Dataset):
         }
 
 
+class ContestedTemporalObjectPermanenceDataset(Dataset):
+    """Two same-class object tracks where the target is occluded by row."""
+
+    phase_count = 5
+    track_count = 2
+    sequential = True
+
+    def __init__(
+        self,
+        model_cfg: TsmConfig,
+        length: int = 1024,
+        seed: int = 41,
+        split: str = "train",
+    ) -> None:
+        self.model_cfg = model_cfg
+        self.length = length
+        self.seed = seed
+        self.split = split
+        self.dataset_id = _dataset_id("temporal_objects_contested_position")
+
+    def __len__(self) -> int:
+        return self.length
+
+    def _state(self, phase: int) -> tuple[bool, bool]:
+        visible = phase in {0, 1, 2}
+        occluded = phase in {3, 4}
+        return visible, occluded
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        rows_per_scene = self.phase_count * self.track_count
+        scene_id = idx // rows_per_scene
+        phase = (idx // self.track_count) % self.phase_count
+        track_id = idx % self.track_count
+        next_phase = (phase + 1) % self.phase_count
+        object_id = 1
+        object_file_id = scene_id * self.track_count + track_id
+
+        visible_t, occluded_t = self._state(phase)
+        visible_tp1, occluded_tp1 = self._state(next_phase)
+        mode = 2 if phase in {2, 3} else phase
+        if phase == 4:
+            mode = 3
+
+        image_t = _render_contested_frame(
+            self.model_cfg,
+            scene_id,
+            track_id,
+            phase,
+            visible_t,
+            occluded_t,
+            self.split,
+        )
+        image_tp1 = _render_contested_frame(
+            self.model_cfg,
+            scene_id,
+            track_id,
+            next_phase,
+            visible_tp1,
+            occluded_tp1,
+            self.split,
+        )
+        x_t, y_t = _contested_position(self.model_cfg, scene_id, track_id, phase, self.split)
+        x_tp1, y_tp1 = _contested_position(self.model_cfg, scene_id, track_id, next_phase, self.split)
+        other_track_id = 1 - track_id
+        other_x_t, other_y_t = _contested_position(self.model_cfg, scene_id, other_track_id, phase, self.split)
+        other_x_tp1, other_y_tp1 = _contested_position(self.model_cfg, scene_id, other_track_id, next_phase, self.split)
+        return {
+            "image_t": image_t,
+            "image_tp1": image_tp1,
+            "label": torch.tensor(mode, dtype=torch.long),
+            "mode": torch.tensor(mode, dtype=torch.long),
+            "phase": torch.tensor(phase, dtype=torch.long),
+            "object_id": torch.tensor(object_id, dtype=torch.long),
+            "track_id": torch.tensor(track_id, dtype=torch.long),
+            "sequence_id": torch.tensor(scene_id, dtype=torch.long),
+            "object_file_id": torch.tensor(object_file_id, dtype=torch.long),
+            "dataset_id": torch.tensor(self.dataset_id, dtype=torch.long),
+            "visible_t": torch.tensor(float(visible_t), dtype=torch.float32),
+            "visible_tp1": torch.tensor(float(visible_tp1), dtype=torch.float32),
+            "occluded_t": torch.tensor(float(occluded_t), dtype=torch.float32),
+            "occluded_tp1": torch.tensor(float(occluded_tp1), dtype=torch.float32),
+            "moved": torch.tensor(float(phase == 1), dtype=torch.float32),
+            "identity_preserved": torch.tensor(1.0, dtype=torch.float32),
+            "unexpected_disappearance": torch.tensor(float(visible_t and occluded_tp1), dtype=torch.float32),
+            "object_position_t": torch.tensor([x_t, y_t], dtype=torch.float32),
+            "object_position_tp1": torch.tensor([x_tp1, y_tp1], dtype=torch.float32),
+            "distractor_position_t": torch.tensor([other_x_t, other_y_t], dtype=torch.float32),
+            "distractor_position_tp1": torch.tensor([other_x_tp1, other_y_tp1], dtype=torch.float32),
+            "same_class_contested": torch.tensor(1.0, dtype=torch.float32),
+            "identity_swap_violation": torch.tensor(0.0, dtype=torch.float32),
+        }
+
+
 def make_dataset(data_cfg: DatasetConfig, model_cfg: TsmConfig) -> Dataset:
     if data_cfg.name == "synthetic":
         return SyntheticImageStreamDataset(model_cfg, length=data_cfg.limit or 512, seed=data_cfg.seed)
@@ -395,5 +545,17 @@ def make_dataset(data_cfg: DatasetConfig, model_cfg: TsmConfig) -> Dataset:
     if data_cfg.name in {"temporal_objects", "object_permanence", "synthetic_temporal_objects"}:
         split = data_cfg.variant or data_cfg.split
         return TemporalObjectPermanenceDataset(model_cfg, length=data_cfg.limit or 1024, seed=data_cfg.seed, split=split)
+    if data_cfg.name in {
+        "temporal_objects_two_object",
+        "temporal_objects_contested_position",
+        "object_permanence_contested",
+    }:
+        split = data_cfg.variant or data_cfg.split
+        return ContestedTemporalObjectPermanenceDataset(
+            model_cfg,
+            length=data_cfg.limit or 1024,
+            seed=data_cfg.seed,
+            split=split,
+        )
     Path(data_cfg.cache_dir).mkdir(parents=True, exist_ok=True)
     return ImageStreamDataset(data_cfg, model_cfg)

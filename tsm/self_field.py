@@ -98,6 +98,13 @@ def _zero_like_scalar(reference: torch.Tensor) -> torch.Tensor:
     return torch.zeros((), dtype=reference.dtype, device=reference.device)
 
 
+def _object_instance_ids(batch: dict[str, torch.Tensor], device: torch.device) -> torch.Tensor | None:
+    ids = batch.get("object_file_id", batch.get("sequence_id"))
+    if ids is None:
+        return None
+    return ids.to(device=device, dtype=torch.long)
+
+
 def _normalized_pixel_position(position: torch.Tensor, cfg: TsmConfig) -> torch.Tensor:
     return position / float(max(1, cfg.image_size))
 
@@ -966,13 +973,13 @@ class Self(nn.Module):
                         self.cfg.reappearance_file_query_temperature,
                     )
                     file_query_hard = _zero_like_scalar(image_t)
-                    if "sequence_id" in batch and "object_id" in batch:
-                        sequence_id = batch["sequence_id"].to(device=image_t.device, dtype=torch.long)
+                    instance_ids = _object_instance_ids(batch, image_t.device)
+                    if instance_ids is not None and "object_id" in batch:
                         object_id = batch["object_id"].to(device=image_t.device, dtype=torch.long)
                         file_query_hard = _grouped_contrastive_query_loss(
                             target_query_scores,
                             target_file_scores,
-                            sequence_id[reappeared_for_alignment],
+                            instance_ids[reappeared_for_alignment],
                             object_id[reappeared_for_alignment],
                             self.cfg.reappearance_file_query_temperature,
                         )
@@ -987,19 +994,19 @@ class Self(nn.Module):
                     )
                     if (
                         self.cfg.active_file_expectation_hard_weight > 0.0
-                        and "sequence_id" in batch
                         and "object_id" in batch
                     ):
-                        sequence_id = batch["sequence_id"].to(device=image_t.device, dtype=torch.long)
+                        instance_ids = _object_instance_ids(batch, image_t.device)
                         object_id = batch["object_id"].to(device=image_t.device, dtype=torch.long)
-                        active_file_expectation_hard = _grouped_contrastive_query_loss(
-                            expected_state_scores,
-                            target_scores,
-                            sequence_id[reappeared_for_alignment],
-                            object_id[reappeared_for_alignment],
-                            self.cfg.active_file_expectation_temperature,
-                            detach_files=True,
-                        )
+                        if instance_ids is not None:
+                            active_file_expectation_hard = _grouped_contrastive_query_loss(
+                                expected_state_scores,
+                                target_scores,
+                                instance_ids[reappeared_for_alignment],
+                                object_id[reappeared_for_alignment],
+                                self.cfg.active_file_expectation_temperature,
+                                detach_files=True,
+                            )
                     active_file_expectation = (
                         active_file_expectation_pair
                         + self.cfg.active_file_expectation_hard_weight * active_file_expectation_hard
@@ -1351,6 +1358,9 @@ class Self(nn.Module):
                     image_t.dtype,
                 ),
             })
+            if "same_class_contested" in batch:
+                contested = batch["same_class_contested"].to(device=image_t.device, dtype=image_t.dtype)
+                diagnostics["temporal_same_class_contested_fraction"] = contested.mean()
             diagnostics["temporal_sae_occlusion_delta"] = (
                 diagnostics["temporal_sae_occluded_mean"] - diagnostics["temporal_sae_visible_mean"]
             )
@@ -1771,9 +1781,9 @@ class Self(nn.Module):
                             if predicted_position_candidates is not None
                             else feature_only_candidates
                         )
-                    if "sequence_id" in batch:
-                        sequence_id = batch["sequence_id"].to(device=image_t.device, dtype=torch.long)
-                        source_sequences = sequence_id[reappeared_active]
+                    instance_ids = _object_instance_ids(batch, image_t.device)
+                    if instance_ids is not None:
+                        source_sequences = instance_ids[reappeared_active]
                         diagnostics.update(_prefix_metrics(
                             "reappeared_file_",
                             grouped_instance_match_diagnostics(
