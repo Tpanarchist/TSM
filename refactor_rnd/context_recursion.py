@@ -27,10 +27,10 @@ class Trit:
 
 
 @dataclass(frozen=True)
-class Tryte:
-    """A variable-size relation packet made from TRITs.
+class Context:
+    """A variable-size relation context made from TRITs.
 
-    A TRYTE is intentionally not "three TRITs." It is the pocket dimension:
+    A CONTEXT is intentionally not "three TRITs." It is the context dimension:
     lower units plus their directed relation structure inside a frame.
     """
 
@@ -49,11 +49,10 @@ class Tryte:
 
 
 @dataclass
-class Trion:
-    """A stable classified ternary object.
+class Abstraction:
+    """A stable classified abstraction.
 
-    A TRION is the TSM-native name for what a generic cognition vocabulary
-    might call a Cognit.
+    An ABSTRACTION is the stable classified unit produced from contexts.
     """
 
     id: int
@@ -73,7 +72,7 @@ class Trion:
 class ProbeMetrics:
     accuracy: float
     nmi: float
-    trion_count: int
+    abstraction_count: int
     abstain_rate: float
 
 
@@ -85,10 +84,10 @@ def one_hot_symbols(sequence: list[int] | tuple[int, ...], vocab_size: int) -> t
     )
 
 
-def build_tryte(sequence: list[int] | tuple[int, ...], vocab_size: int, frame: int = 0, level: int = 0) -> Tryte:
+def build_context(sequence: list[int] | tuple[int, ...], vocab_size: int, frame: int = 0, level: int = 0) -> Context:
     trits = one_hot_symbols(sequence, vocab_size)
     relation_matrix = directed_transition_matrix(sequence, vocab_size)
-    return Tryte(trits=trits, frame=frame, level=level, relation_matrix=relation_matrix)
+    return Context(trits=trits, frame=frame, level=level, relation_matrix=relation_matrix)
 
 
 def directed_transition_matrix(sequence: list[int] | tuple[int, ...], vocab_size: int) -> np.ndarray:
@@ -112,18 +111,18 @@ def histogram_encoder(sequence: list[int] | tuple[int, ...], vocab_size: int) ->
     return counts / total if total > 0.0 else counts
 
 
-def tryte_relation_space_encoder(sequence: list[int] | tuple[int, ...], vocab_size: int) -> np.ndarray:
-    tryte = build_tryte(sequence, vocab_size)
-    return tryte.relation_matrix.reshape(-1)
+def context_relation_space_encoder(sequence: list[int] | tuple[int, ...], vocab_size: int) -> np.ndarray:
+    context = build_context(sequence, vocab_size)
+    return context.relation_matrix.reshape(-1)
 
 
-class AbstainGatedTrionizer:
-    """Online prototype learner with explicit Abstain before TRION creation."""
+class AbstainGatedAbstractor:
+    """Online prototype learner with explicit Abstain before abstraction creation."""
 
     def __init__(self, approve_radius: float = 0.05, min_evidence: int = 2) -> None:
         self.approve_radius = float(approve_radius)
         self.min_evidence = int(max(1, min_evidence))
-        self.trions: list[Trion] = []
+        self.abstractions: list[Abstraction] = []
         self._pending: list[tuple[np.ndarray, int | None]] = []
         self.votes: list[TritVote] = []
 
@@ -136,11 +135,11 @@ class AbstainGatedTrionizer:
 
     def observe(self, vector: np.ndarray, label: int | None = None) -> int:
         vector = np.asarray(vector, dtype=np.float64)
-        if self.trions:
-            distances = np.asarray([np.linalg.norm(vector - trion.prototype) for trion in self.trions])
+        if self.abstractions:
+            distances = np.asarray([np.linalg.norm(vector - abstraction.prototype) for abstraction in self.abstractions])
             nearest = int(distances.argmin())
             if float(distances[nearest]) <= self.approve_radius:
-                self.trions[nearest].update(vector, label)
+                self.abstractions[nearest].update(vector, label)
                 self.votes.append(TritVote.APPROVE)
                 return nearest
 
@@ -153,10 +152,10 @@ class AbstainGatedTrionizer:
             for _, pending_label in self._pending:
                 if pending_label is not None:
                     label_counts[int(pending_label)] = label_counts.get(int(pending_label), 0) + 1
-            trion_id = len(self.trions)
-            self.trions.append(Trion(id=trion_id, prototype=prototype, support=len(self._pending), label_counts=label_counts))
+            abstraction_id = len(self.abstractions)
+            self.abstractions.append(Abstraction(id=abstraction_id, prototype=prototype, support=len(self._pending), label_counts=label_counts))
             self._pending.clear()
-            return trion_id
+            return abstraction_id
         return -1
 
     @property
@@ -203,8 +202,8 @@ def encode_sequences(
 ) -> np.ndarray:
     if encoder == "histogram":
         rows = [histogram_encoder(sequence, vocab_size) for sequence in sequences]
-    elif encoder == "tryte_relation_space":
-        rows = [tryte_relation_space_encoder(sequence, vocab_size) for sequence in sequences]
+    elif encoder == "context_relation_space":
+        rows = [context_relation_space_encoder(sequence, vocab_size) for sequence in sequences]
     else:
         raise ValueError(f"unknown encoder: {encoder}")
     return np.stack(rows).astype(np.float64)
@@ -219,13 +218,13 @@ def run_probe(
     min_evidence: int = 2,
 ) -> ProbeMetrics:
     features = encode_sequences(sequences, vocab_size, encoder)
-    trionizer = AbstainGatedTrionizer(approve_radius=approve_radius, min_evidence=min_evidence)
-    predictions = trionizer.fit_predict(features, labels)
+    abstractor = AbstainGatedAbstractor(approve_radius=approve_radius, min_evidence=min_evidence)
+    predictions = abstractor.fit_predict(features, labels)
     return ProbeMetrics(
         accuracy=nearest_centroid_accuracy(features, labels),
         nmi=normalized_mutual_information(labels, predictions),
-        trion_count=len(trionizer.trions),
-        abstain_rate=trionizer.abstain_rate,
+        abstraction_count=len(abstractor.abstractions),
+        abstain_rate=abstractor.abstain_rate,
     )
 
 
@@ -237,10 +236,10 @@ def novelty_stream_metrics() -> dict[str, float]:
     ]
     labels = [0] * 20 + [1] * 20 + [2] * 20
     sequences = [patterns[label] for label in labels]
-    features = encode_sequences(sequences, vocab_size=4, encoder="tryte_relation_space")
-    trionizer = AbstainGatedTrionizer(approve_radius=0.02, min_evidence=3)
-    predictions = trionizer.fit_predict(features, np.asarray(labels, dtype=np.int64))
-    votes = np.asarray([1 if vote == TritVote.ABSTAIN else 0 for vote in trionizer.votes], dtype=np.float64)
+    features = encode_sequences(sequences, vocab_size=4, encoder="context_relation_space")
+    abstractor = AbstainGatedAbstractor(approve_radius=0.02, min_evidence=3)
+    predictions = abstractor.fit_predict(features, np.asarray(labels, dtype=np.int64))
+    votes = np.asarray([1 if vote == TritVote.ABSTAIN else 0 for vote in abstractor.votes], dtype=np.float64)
     phase_rates = [float(votes[start : start + 20].mean()) for start in (0, 20, 40)]
     early_rates = [float(votes[start : start + 5].mean()) for start in (0, 20, 40)]
     late_rates = [float(votes[start + 10 : start + 20].mean()) for start in (0, 20, 40)]
@@ -252,7 +251,7 @@ def novelty_stream_metrics() -> dict[str, float]:
         "novelty_spike_2": early_rates[2] - late_rates[1],
         "phase1_settle_delta": early_rates[1] - late_rates[1],
         "phase2_settle_delta": early_rates[2] - late_rates[2],
-        "trion_count": float(len(trionizer.trions)),
+        "abstraction_count": float(len(abstractor.abstractions)),
         "nmi": normalized_mutual_information(np.asarray(labels, dtype=np.int64), predictions),
     }
 
@@ -264,53 +263,53 @@ def depth_probe_metrics() -> dict[str, Any]:
         [0, 2, 1, 3, 0, 2, 1, 3],
     )
     level1_sequences, level1_labels, level0_vocab = _repeat_patterns(level0_patterns, samples_per_regime=16, vocab_size=4)
-    level1_features = encode_sequences(level1_sequences, level0_vocab, "tryte_relation_space")
-    level1_trionizer = AbstainGatedTrionizer(approve_radius=0.02, min_evidence=2)
-    level1_ids = level1_trionizer.fit_predict(level1_features, level1_labels)
+    level1_features = encode_sequences(level1_sequences, level0_vocab, "context_relation_space")
+    level1_abstractor = AbstainGatedAbstractor(approve_radius=0.02, min_evidence=2)
+    level1_ids = level1_abstractor.fit_predict(level1_features, level1_labels)
 
     level2_sequences: list[list[int]] = []
     level2_labels: list[int] = []
     for label, template in enumerate(([0, 1, 0, 1, 2, 2], [0, 2, 0, 2, 1, 1])):
         for _ in range(12):
-            level2_sequences.append([_first_trion_for_label(level1_ids, level1_labels, unit) for unit in template])
+            level2_sequences.append([_first_abstraction_for_label(level1_ids, level1_labels, unit) for unit in template])
             level2_labels.append(label)
-    level2_features = encode_sequences(level2_sequences, vocab_size=max(1, len(level1_trionizer.trions)), encoder="tryte_relation_space")
-    level2_trionizer = AbstainGatedTrionizer(approve_radius=0.02, min_evidence=2)
-    level2_ids = level2_trionizer.fit_predict(level2_features, np.asarray(level2_labels, dtype=np.int64))
+    level2_features = encode_sequences(level2_sequences, vocab_size=max(1, len(level1_abstractor.abstractions)), encoder="context_relation_space")
+    level2_abstractor = AbstainGatedAbstractor(approve_radius=0.02, min_evidence=2)
+    level2_ids = level2_abstractor.fit_predict(level2_features, np.asarray(level2_labels, dtype=np.int64))
 
     level3_sequences: list[list[int]] = []
     level3_labels: list[int] = []
     for label, template in enumerate(([0, 1, 0, 1], [1, 0, 1, 0])):
         for _ in range(8):
-            level3_sequences.append([_first_trion_for_label(level2_ids, np.asarray(level2_labels), unit) for unit in template])
+            level3_sequences.append([_first_abstraction_for_label(level2_ids, np.asarray(level2_labels), unit) for unit in template])
             level3_labels.append(label)
-    level3_features = encode_sequences(level3_sequences, vocab_size=max(1, len(level2_trionizer.trions)), encoder="tryte_relation_space")
-    level3_trionizer = AbstainGatedTrionizer(approve_radius=0.02, min_evidence=2)
-    level3_ids = level3_trionizer.fit_predict(level3_features, np.asarray(level3_labels, dtype=np.int64))
+    level3_features = encode_sequences(level3_sequences, vocab_size=max(1, len(level2_abstractor.abstractions)), encoder="context_relation_space")
+    level3_abstractor = AbstainGatedAbstractor(approve_radius=0.02, min_evidence=2)
+    level3_ids = level3_abstractor.fit_predict(level3_features, np.asarray(level3_labels, dtype=np.int64))
 
     return {
         "level1": {
             "nmi": normalized_mutual_information(level1_labels, level1_ids),
             "accuracy": nearest_centroid_accuracy(level1_features, level1_labels),
-            "trion_count": len(level1_trionizer.trions),
-            "abstain_rate": level1_trionizer.abstain_rate,
+            "abstraction_count": len(level1_abstractor.abstractions),
+            "abstain_rate": level1_abstractor.abstain_rate,
         },
         "level2": {
             "nmi": normalized_mutual_information(np.asarray(level2_labels), level2_ids),
             "accuracy": nearest_centroid_accuracy(level2_features, np.asarray(level2_labels)),
-            "trion_count": len(level2_trionizer.trions),
-            "abstain_rate": level2_trionizer.abstain_rate,
+            "abstraction_count": len(level2_abstractor.abstractions),
+            "abstain_rate": level2_abstractor.abstain_rate,
         },
         "level3": {
             "nmi": normalized_mutual_information(np.asarray(level3_labels), level3_ids),
             "accuracy": nearest_centroid_accuracy(level3_features, np.asarray(level3_labels)),
-            "trion_count": len(level3_trionizer.trions),
-            "abstain_rate": level3_trionizer.abstain_rate,
+            "abstraction_count": len(level3_abstractor.abstractions),
+            "abstain_rate": level3_abstractor.abstain_rate,
         },
     }
 
 
-def _first_trion_for_label(predictions: np.ndarray, labels: np.ndarray, label: int) -> int:
+def _first_abstraction_for_label(predictions: np.ndarray, labels: np.ndarray, label: int) -> int:
     matches = predictions[(labels == label) & (predictions >= 0)]
     if matches.size == 0:
         return 0
@@ -325,14 +324,14 @@ def run_all(seed: int = 31) -> dict[str, Any]:
     same_sequences, same_labels, same_vocab = same_marginal_order_sequences()
     anchor_sequences, anchor_labels, anchor_vocab = shared_anchor_sequences()
     same_hist = run_probe(same_sequences, same_labels, same_vocab, "histogram")
-    same_relation = run_probe(same_sequences, same_labels, same_vocab, "tryte_relation_space")
+    same_relation = run_probe(same_sequences, same_labels, same_vocab, "context_relation_space")
     anchor_hist = run_probe(anchor_sequences, anchor_labels, anchor_vocab, "histogram")
-    anchor_relation = run_probe(anchor_sequences, anchor_labels, anchor_vocab, "tryte_relation_space")
+    anchor_relation = run_probe(anchor_sequences, anchor_labels, anchor_vocab, "context_relation_space")
     return {
         "seed": seed,
         "same_marginal": {
             "histogram": same_hist.__dict__,
-            "tryte_relation_space": same_relation.__dict__,
+            "context_relation_space": same_relation.__dict__,
             "relation_nmi_delta": same_relation.nmi - same_hist.nmi,
             "acceptance_pass": (
                 (same_hist.nmi <= 0.25 or same_hist.accuracy <= 0.60)
@@ -342,7 +341,7 @@ def run_all(seed: int = 31) -> dict[str, Any]:
         },
         "shared_anchor": {
             "histogram": anchor_hist.__dict__,
-            "tryte_relation_space": anchor_relation.__dict__,
+            "context_relation_space": anchor_relation.__dict__,
             "relation_nmi_delta": anchor_relation.nmi - anchor_hist.nmi,
             "acceptance_pass": (anchor_relation.nmi - anchor_hist.nmi) >= 0.40,
         },
@@ -363,10 +362,10 @@ def aggregate_results(results: list[dict[str, Any]]) -> dict[str, Any]:
 
     metric_paths = {
         "same_histogram_nmi": ("same_marginal", "histogram", "nmi"),
-        "same_relation_nmi": ("same_marginal", "tryte_relation_space", "nmi"),
-        "same_relation_accuracy": ("same_marginal", "tryte_relation_space", "accuracy"),
+        "same_relation_nmi": ("same_marginal", "context_relation_space", "nmi"),
+        "same_relation_accuracy": ("same_marginal", "context_relation_space", "accuracy"),
         "shared_histogram_nmi": ("shared_anchor", "histogram", "nmi"),
-        "shared_relation_nmi": ("shared_anchor", "tryte_relation_space", "nmi"),
+        "shared_relation_nmi": ("shared_anchor", "context_relation_space", "nmi"),
         "shared_relation_nmi_delta": ("shared_anchor", "relation_nmi_delta"),
         "novelty_spike_1": ("novelty", "novelty_spike_1"),
         "novelty_spike_2": ("novelty", "novelty_spike_2"),

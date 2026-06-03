@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from .pocket_recursion import aggregate_results, run_all, to_jsonable
+from .context_recursion import aggregate_results, run_all, to_jsonable
 
 
 def _parse_seeds(value: str) -> list[int]:
@@ -13,7 +13,7 @@ def _parse_seeds(value: str) -> list[int]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m refactor_rnd.run_pocket_recursion")
+    parser = argparse.ArgumentParser(prog="python -m refactor_rnd.run_context_recursion")
     parser.add_argument("--seeds", default="31,37,43,47,53")
     parser.add_argument("--out", default="refactor_rnd/runs")
     return parser
@@ -25,12 +25,12 @@ def main(argv: list[str] | None = None) -> None:
     results = [run_all(seed) for seed in seeds]
     aggregate = aggregate_results(results)
     payload = {
-        "summary": "TRIT -> TRYTE -> TRION pocket-recursion bench",
+        "summary": "TRIT -> CONTEXT -> ABSTRACTION context-recursion bench",
         "seeds": seeds,
         "aggregate": aggregate,
         "per_seed": results,
     }
-    run_dir = Path(args.out) / datetime.now().strftime("%Y%m%d_%H%M%S_pocket_recursion")
+    run_dir = Path(args.out) / datetime.now().strftime("%Y%m%d_%H%M%S_context_recursion")
     run_dir.mkdir(parents=True, exist_ok=False)
     metrics_path = run_dir / "metrics.json"
     summary_path = run_dir / "summary.md"
@@ -43,9 +43,9 @@ def _summary_markdown(payload: dict) -> str:
     aggregate = payload["aggregate"]
     acceptance = aggregate["acceptance"]
     lines = [
-        "# Pocket-Recursion Bench",
+        "# Context-Recursion Bench",
         "",
-        "This R&D bench tests whether higher levels need relation-space TRYTES rather than histogram summaries.",
+        "This R&D bench tests whether higher levels need relation-space CONTEXTS rather than histogram summaries.",
         "",
         "## Acceptance",
         "",
@@ -66,16 +66,16 @@ def _summary_markdown(payload: dict) -> str:
         "",
         "## Depth Probe",
         "",
-        "Depth probe has no pass criterion. It reports whether TRIONs can re-enter as next-octave units without collapse.",
+        "Depth probe has no pass criterion. It reports whether abstractions can re-enter as next-octave units without collapse.",
     ])
     first = payload["per_seed"][0]["depth_probe"]
     lines.append("")
-    lines.append("| level | nmi | accuracy | trion_count | abstain_rate |")
+    lines.append("| level | nmi | accuracy | abstraction_count | abstain_rate |")
     lines.append("|---|---:|---:|---:|---:|")
     for level_name, metrics in first.items():
         lines.append(
             f"| {level_name} | {metrics['nmi']:.3f} | {metrics['accuracy']:.3f} | "
-            f"{metrics['trion_count']} | {metrics['abstain_rate']:.3f} |"
+            f"{metrics['abstraction_count']} | {metrics['abstain_rate']:.3f} |"
         )
     return "\n".join(lines) + "\n"
 
