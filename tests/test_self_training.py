@@ -591,9 +591,17 @@ def test_all_track_runtime_confidence_reports_tail_danger_detection():
 
     assert metrics["unsafe_endpoint_error_ratio_threshold"].item() == 0.5
     assert torch.isclose(metrics["unsafe_endpoint_error_fraction"], torch.tensor(1.0 / 3.0))
+    assert metrics["slot_unsafe_fraction"].item() == 0.0
+    assert torch.isclose(metrics["pair_unsafe_fraction"], torch.tensor(1.0 / 3.0))
+    assert metrics["pair_unsafe_within_scene_valid_fraction"].item() == 1.0
     assert metrics["endpoint_error_to_spacing_ratio_p90"].item() > 1.0
     assert metrics["calibrated_uncertainty_unsafe_auroc"].item() == 1.0
     assert metrics["calibrated_uncertainty_unsafe_auprc"].item() == 1.0
+    assert metrics["calibrated_uncertainty_pair_unsafe_within_scene_auroc"].item() == 1.0
+    assert metrics["calibrated_uncertainty_pair_unsafe_within_scene_auprc"].item() == 1.0
+    assert metrics["calibrated_uncertainty_scene_adjusted_pair_unsafe_auroc"].item() == 1.0
+    assert metrics["calibrated_uncertainty_within_scene_variance_mean"].item() > 0.0
+    assert metrics["calibrated_uncertainty_within_scene_pair_unsafe_gap"].item() > 0.0
     assert metrics["calibrated_uncertainty_unsafe_lift"].item() > 0.0
     assert metrics["calibrated_uncertainty_error_high_bucket_mean"].item() > (
         metrics["calibrated_uncertainty_error_low_bucket_mean"].item()
@@ -935,6 +943,9 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_dynamics_runtime_confidence_actual_endpoint_error_p90",
         "reappeared_dynamics_runtime_confidence_endpoint_error_to_spacing_ratio_p90",
         "reappeared_dynamics_runtime_confidence_unsafe_endpoint_error_fraction",
+        "reappeared_dynamics_runtime_confidence_slot_unsafe_fraction",
+        "reappeared_dynamics_runtime_confidence_pair_unsafe_fraction",
+        "reappeared_dynamics_runtime_confidence_pair_unsafe_within_scene_valid_fraction",
         "reappeared_dynamics_runtime_confidence_runtime_uncertainty_mean",
         "reappeared_dynamics_runtime_confidence_runtime_confidence_mean",
         "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_mean",
@@ -950,6 +961,14 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_dynamics_runtime_confidence_runtime_uncertainty_unsafe_auprc",
         "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_unsafe_auroc",
         "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_unsafe_auprc",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_pair_unsafe_auroc",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_pair_unsafe_auprc",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_pair_unsafe_within_scene_auroc",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_pair_unsafe_within_scene_auprc",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_scene_adjusted_pair_unsafe_auroc",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_scene_adjusted_pair_unsafe_auprc",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_within_scene_variance_mean",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_within_scene_pair_unsafe_gap",
         "reappeared_dynamics_runtime_confidence_naive_margin_uncertainty_unsafe_auroc",
         "reappeared_dynamics_runtime_confidence_naive_margin_uncertainty_unsafe_auprc",
         "reappeared_dynamics_runtime_confidence_candidate_margin_uncertainty_unsafe_auroc",

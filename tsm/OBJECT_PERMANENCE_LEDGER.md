@@ -1153,3 +1153,63 @@ Current fork:
 - Do not implement Definition splitting yet.
 - Keep the tail-risk objective as an optional diagnostic/training control, not the default claim.
 - Next useful calibration source is not a bigger decline policy. It is richer uncertainty evidence in the file state: residual history, distributional/variance dynamics, ensemble/dropout disagreement, or per-slot trajectory residual memory.
+
+## Probe A-prime Stage 1d: Relation-Local Calibration Audit
+
+Diagnostic/code added:
+
+- file-level unsafe ranking remains `endpoint_error / nearest_interobject_spacing >= 0.5`.
+- slot-level unsafe ranking reports slot localization danger with the same spacing threshold.
+- pair-level unsafe ranking reports whether the file-slot decision is below its nearest-competitor margin.
+- within-scene AUROC/AUPRC for file-level and pair-level unsafe detection.
+- per-scene calibration variance.
+- safe-vs-unsafe uncertainty gap inside each scene.
+- scene-adjusted calibrated pair risk:
+
+```text
+pair_risk_adjusted = pair_risk - scene_mean(pair_risk)
+```
+
+Relation eval outputs:
+
+- `runs/20260602_195635_temporal_objects_calibration_curved_4/relation_eval_best.json`
+- `runs/20260602_204436_temporal_objects_tail_calibration_curved_4/relation_eval_latest.json`
+- `runs/20260602_195929_temporal_objects_calibration_curved_4_wide/relation_eval_best.json`
+- `runs/20260602_204529_temporal_objects_tail_calibration_curved_4_wide/relation_eval_latest.json`
+
+Held-out/test summary:
+
+| condition | file unsafe | pair unsafe | slot unsafe | pair-valid scenes | calibrated pair AUROC/AUPRC | calibrated within-scene pair AUROC/AUPRC | scene-adjusted pair AUROC/AUPRC | calibrated within-scene variance | calibrated within-scene pair gap |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 4-object baseline | 0.500 | 0.688 | 0.000 | 0.750 | 0.850 / 0.924 | 0.806 / 0.917 | 0.779 / 0.907 | 0.000058 | 0.0089 |
+| 4-object tail | 0.375 | 0.563 | 0.000 | 0.750 | 0.862 / 0.904 | 0.889 / 0.833 | 0.775 / 0.844 | 0.000287 | 0.0222 |
+| 4-wide baseline | 0.729 | 0.771 | 0.000 | 0.667 | 0.836 / 0.895 | 0.917 / 0.938 | 0.820 / 0.875 | 0.000071 | 0.0106 |
+| 4-wide tail | 0.583 | 0.729 | 0.000 | 0.750 | 0.913 / 0.957 | 0.917 / 0.955 | 0.905 / 0.951 | 0.000000 | 0.0010 |
+
+Baselines for within-scene pair ranking:
+
+| condition | runtime AUROC/AUPRC | naive-margin AUROC/AUPRC | candidate-margin AUROC/AUPRC |
+|---|---:|---:|---:|
+| 4-object baseline | 0.681 / 0.861 | 0.806 / 0.917 | 0.806 / 0.917 |
+| 4-object tail | 0.500 / 0.667 | 0.583 / 0.694 | 0.583 / 0.694 |
+| 4-wide baseline | 0.771 / 0.920 | 0.833 / 0.924 | 0.854 / 0.938 |
+| 4-wide tail | 0.833 / 0.934 | 0.938 / 0.969 | 0.938 / 0.969 |
+
+Interpretation:
+
+This audit blocks the simplest "scene-global danger mood" interpretation, but it still does not clear Stage 2. The calibrated head can often rank unsafe pair relations inside the same scene. In wide-4 tail, pair-level AUROC/AUPRC is high globally and within-scene (`0.913 / 0.957` global, `0.917 / 0.955` within-scene). That means the head is not merely saying "this whole world is hard." It contains relation-local ordering signal.
+
+The problem is magnitude. Wide-4 tail has almost zero calibrated within-scene variance and only `0.001` unsafe gap. The head can preserve a tiny ordering, but it does not separate unsafe from safe pairs with enough amplitude to drive a reliable decline-to-bind policy. In regular 4-object tail, the amplitude improves (`0.022` gap), but the scene-adjusted AUROC drops relative to raw pair ranking, so the signal is still fragile.
+
+Slot unsafe stays `0.000` in all four audits. That confirms the wall is not slot localization. The failure remains calibration of file-slot relation danger under load.
+
+Current fork:
+
+- Runtime neutral remains blocked.
+- Definition splitting remains blocked.
+- The next useful target is not stronger binary tail loss by itself. The system needs object-local uncertainty state with amplitude, not just rank:
+  - residual history per object file,
+  - predicted endpoint variance/distribution,
+  - ensemble or dropout disagreement,
+  - per-slot trajectory residual memory,
+  - calibration normalized within active candidate sets.

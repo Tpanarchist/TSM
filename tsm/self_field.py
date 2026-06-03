@@ -1562,6 +1562,12 @@ def _all_track_runtime_confidence_metrics(
         "endpoint_error_to_spacing_ratio_p90": zero,
         "unsafe_endpoint_error_ratio_threshold": zero,
         "unsafe_endpoint_error_fraction": zero,
+        "slot_error_to_spacing_ratio_mean": zero,
+        "slot_error_to_spacing_ratio_p90": zero,
+        "slot_unsafe_fraction": zero,
+        "pair_unsafe_fraction": zero,
+        "file_unsafe_within_scene_valid_fraction": zero,
+        "pair_unsafe_within_scene_valid_fraction": zero,
         "runtime_uncertainty_mean": zero,
         "runtime_confidence_mean": zero,
         "calibrated_uncertainty_mean": zero,
@@ -1588,6 +1594,41 @@ def _all_track_runtime_confidence_metrics(
         "naive_margin_uncertainty_unsafe_auprc": zero,
         "candidate_margin_uncertainty_unsafe_auroc": zero,
         "candidate_margin_uncertainty_unsafe_auprc": zero,
+        "runtime_uncertainty_file_unsafe_within_scene_auroc": zero,
+        "runtime_uncertainty_file_unsafe_within_scene_auprc": zero,
+        "calibrated_uncertainty_file_unsafe_within_scene_auroc": zero,
+        "calibrated_uncertainty_file_unsafe_within_scene_auprc": zero,
+        "naive_margin_uncertainty_file_unsafe_within_scene_auroc": zero,
+        "naive_margin_uncertainty_file_unsafe_within_scene_auprc": zero,
+        "candidate_margin_uncertainty_file_unsafe_within_scene_auroc": zero,
+        "candidate_margin_uncertainty_file_unsafe_within_scene_auprc": zero,
+        "runtime_uncertainty_pair_unsafe_auroc": zero,
+        "runtime_uncertainty_pair_unsafe_auprc": zero,
+        "calibrated_uncertainty_pair_unsafe_auroc": zero,
+        "calibrated_uncertainty_pair_unsafe_auprc": zero,
+        "naive_margin_uncertainty_pair_unsafe_auroc": zero,
+        "naive_margin_uncertainty_pair_unsafe_auprc": zero,
+        "candidate_margin_uncertainty_pair_unsafe_auroc": zero,
+        "candidate_margin_uncertainty_pair_unsafe_auprc": zero,
+        "runtime_uncertainty_pair_unsafe_within_scene_auroc": zero,
+        "runtime_uncertainty_pair_unsafe_within_scene_auprc": zero,
+        "calibrated_uncertainty_pair_unsafe_within_scene_auroc": zero,
+        "calibrated_uncertainty_pair_unsafe_within_scene_auprc": zero,
+        "naive_margin_uncertainty_pair_unsafe_within_scene_auroc": zero,
+        "naive_margin_uncertainty_pair_unsafe_within_scene_auprc": zero,
+        "candidate_margin_uncertainty_pair_unsafe_within_scene_auroc": zero,
+        "candidate_margin_uncertainty_pair_unsafe_within_scene_auprc": zero,
+        "calibrated_uncertainty_scene_adjusted_pair_unsafe_auroc": zero,
+        "calibrated_uncertainty_scene_adjusted_pair_unsafe_auprc": zero,
+        "calibrated_uncertainty_scene_adjusted_pair_unsafe_lift": zero,
+        "calibrated_uncertainty_within_scene_variance_mean": zero,
+        "runtime_uncertainty_within_scene_variance_mean": zero,
+        "naive_margin_uncertainty_within_scene_variance_mean": zero,
+        "candidate_margin_uncertainty_within_scene_variance_mean": zero,
+        "calibrated_uncertainty_within_scene_pair_unsafe_gap": zero,
+        "runtime_uncertainty_within_scene_pair_unsafe_gap": zero,
+        "naive_margin_uncertainty_within_scene_pair_unsafe_gap": zero,
+        "candidate_margin_uncertainty_within_scene_pair_unsafe_gap": zero,
         "nearest_distance_error_pearson": zero,
         "nearest_distance_error_spearman": zero,
         "reference_disagreement_error_pearson": zero,
@@ -1714,6 +1755,9 @@ def _all_track_runtime_confidence_metrics(
     unsafe_ratio_threshold = torch.tensor(0.5, dtype=dtype, device=device)
     actual_errors: list[torch.Tensor] = []
     endpoint_error_ratios: list[torch.Tensor] = []
+    slot_error_ratios: list[torch.Tensor] = []
+    pair_unsafe_labels: list[torch.Tensor] = []
+    scene_ids: list[torch.Tensor] = []
     runtime_uncertainties: list[torch.Tensor] = []
     runtime_confidences: list[torch.Tensor] = []
     calibrated_uncertainties: list[torch.Tensor] = []
@@ -1825,9 +1869,15 @@ def _all_track_runtime_confidence_metrics(
             if true_slot is None:
                 continue
             actual_error = (predicted_positions[file_idx] - true_positions[object_idx]).norm() / scale
+            slot_error = (slot_positions[row, true_slot] - true_positions[object_idx]).norm() / scale
             endpoint_error_ratio = torch.where(
                 torch.isfinite(row_min_spacing),
                 actual_error / row_min_spacing.clamp_min(1e-6),
+                zero,
+            )
+            slot_error_ratio = torch.where(
+                torch.isfinite(row_min_spacing),
+                slot_error / row_min_spacing.clamp_min(1e-6),
                 zero,
             )
             should_decline = margin <= actual_error
@@ -1835,6 +1885,9 @@ def _all_track_runtime_confidence_metrics(
 
             actual_errors.append(actual_error)
             endpoint_error_ratios.append(endpoint_error_ratio)
+            slot_error_ratios.append(slot_error_ratio)
+            pair_unsafe_labels.append(should_decline.to(dtype))
+            scene_ids.append(torch.tensor(row, dtype=torch.long, device=device))
             runtime_uncertainties.append(runtime_uncertainty)
             runtime_confidences.append(runtime_confidence)
             calibrated_uncertainties.append(current_calibrated_uncertainty)
@@ -1861,6 +1914,9 @@ def _all_track_runtime_confidence_metrics(
 
     error_tensor = torch.stack(actual_errors)
     endpoint_ratio_tensor = torch.stack(endpoint_error_ratios)
+    slot_ratio_tensor = torch.stack(slot_error_ratios)
+    pair_unsafe_tensor = torch.stack(pair_unsafe_labels).to(dtype)
+    scene_id_tensor = torch.stack(scene_ids)
     uncertainty_tensor = torch.stack(runtime_uncertainties)
     confidence_tensor = torch.stack(runtime_confidences)
     calibrated_uncertainty_tensor = torch.stack(calibrated_uncertainties)
@@ -1900,6 +1956,10 @@ def _all_track_runtime_confidence_metrics(
     mid_bucket_mask = ~(low_bucket_mask | high_bucket_mask)
     unsafe_mask = endpoint_ratio_tensor >= unsafe_ratio_threshold
     safe_mask = ~unsafe_mask
+    slot_unsafe_mask = slot_ratio_tensor >= unsafe_ratio_threshold
+    pair_unsafe_mask = pair_unsafe_tensor.bool()
+    pair_safe_mask = ~pair_unsafe_mask
+    calibrated_scene_adjusted = _scene_adjusted_scores(calibrated_uncertainty_tensor, scene_id_tensor)
     runtime_high = _masked_mean(uncertainty_tensor, high_error_mask, dtype)
     runtime_low = _masked_mean(uncertainty_tensor, low_error_mask, dtype)
     calibrated_high = _masked_mean(calibrated_uncertainty_tensor, high_error_mask, dtype)
@@ -1916,6 +1976,8 @@ def _all_track_runtime_confidence_metrics(
     naive_safe = _masked_mean(naive_uncertainty_tensor, safe_mask, dtype)
     candidate_margin_unsafe = _masked_mean(candidate_margin_uncertainty_tensor, unsafe_mask, dtype)
     candidate_margin_safe = _masked_mean(candidate_margin_uncertainty_tensor, safe_mask, dtype)
+    calibrated_pair_adjusted_unsafe = _masked_mean(calibrated_scene_adjusted, pair_unsafe_mask, dtype)
+    calibrated_pair_adjusted_safe = _masked_mean(calibrated_scene_adjusted, pair_safe_mask, dtype)
     return {
         "object_count": torch.tensor(float(object_count), dtype=dtype, device=device),
         "decision_coverage_fraction": torch.tensor(float(error_tensor.numel()) / expected_decisions, dtype=dtype, device=device),
@@ -1925,6 +1987,20 @@ def _all_track_runtime_confidence_metrics(
         "endpoint_error_to_spacing_ratio_p90": _quantile_or_zero(endpoint_ratio_tensor, 0.90, zero),
         "unsafe_endpoint_error_ratio_threshold": unsafe_ratio_threshold,
         "unsafe_endpoint_error_fraction": unsafe_mask.to(dtype).mean(),
+        "slot_error_to_spacing_ratio_mean": slot_ratio_tensor.mean(),
+        "slot_error_to_spacing_ratio_p90": _quantile_or_zero(slot_ratio_tensor, 0.90, zero),
+        "slot_unsafe_fraction": slot_unsafe_mask.to(dtype).mean(),
+        "pair_unsafe_fraction": pair_unsafe_tensor.mean(),
+        "file_unsafe_within_scene_valid_fraction": _within_group_binary_valid_fraction(
+            unsafe_mask,
+            scene_id_tensor,
+            zero,
+        ),
+        "pair_unsafe_within_scene_valid_fraction": _within_group_binary_valid_fraction(
+            pair_unsafe_mask,
+            scene_id_tensor,
+            zero,
+        ),
         "runtime_uncertainty_mean": uncertainty_tensor.mean(),
         "runtime_confidence_mean": confidence_tensor.mean(),
         "calibrated_uncertainty_mean": calibrated_uncertainty_tensor.mean(),
@@ -1981,6 +2057,215 @@ def _all_track_runtime_confidence_metrics(
         "candidate_margin_uncertainty_unsafe_auprc": _binary_auprc_or_zero(
             candidate_margin_uncertainty_tensor,
             unsafe_mask,
+            zero,
+        ),
+        "runtime_uncertainty_file_unsafe_within_scene_auroc": _within_group_binary_metric_or_zero(
+            uncertainty_tensor,
+            unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auroc_or_zero,
+        ),
+        "runtime_uncertainty_file_unsafe_within_scene_auprc": _within_group_binary_metric_or_zero(
+            uncertainty_tensor,
+            unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auprc_or_zero,
+        ),
+        "calibrated_uncertainty_file_unsafe_within_scene_auroc": _within_group_binary_metric_or_zero(
+            calibrated_uncertainty_tensor,
+            unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auroc_or_zero,
+        ),
+        "calibrated_uncertainty_file_unsafe_within_scene_auprc": _within_group_binary_metric_or_zero(
+            calibrated_uncertainty_tensor,
+            unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auprc_or_zero,
+        ),
+        "naive_margin_uncertainty_file_unsafe_within_scene_auroc": _within_group_binary_metric_or_zero(
+            naive_uncertainty_tensor,
+            unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auroc_or_zero,
+        ),
+        "naive_margin_uncertainty_file_unsafe_within_scene_auprc": _within_group_binary_metric_or_zero(
+            naive_uncertainty_tensor,
+            unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auprc_or_zero,
+        ),
+        "candidate_margin_uncertainty_file_unsafe_within_scene_auroc": _within_group_binary_metric_or_zero(
+            candidate_margin_uncertainty_tensor,
+            unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auroc_or_zero,
+        ),
+        "candidate_margin_uncertainty_file_unsafe_within_scene_auprc": _within_group_binary_metric_or_zero(
+            candidate_margin_uncertainty_tensor,
+            unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auprc_or_zero,
+        ),
+        "runtime_uncertainty_pair_unsafe_auroc": _binary_auroc_or_zero(
+            uncertainty_tensor,
+            pair_unsafe_mask,
+            zero,
+        ),
+        "runtime_uncertainty_pair_unsafe_auprc": _binary_auprc_or_zero(
+            uncertainty_tensor,
+            pair_unsafe_mask,
+            zero,
+        ),
+        "calibrated_uncertainty_pair_unsafe_auroc": _binary_auroc_or_zero(
+            calibrated_uncertainty_tensor,
+            pair_unsafe_mask,
+            zero,
+        ),
+        "calibrated_uncertainty_pair_unsafe_auprc": _binary_auprc_or_zero(
+            calibrated_uncertainty_tensor,
+            pair_unsafe_mask,
+            zero,
+        ),
+        "naive_margin_uncertainty_pair_unsafe_auroc": _binary_auroc_or_zero(
+            naive_uncertainty_tensor,
+            pair_unsafe_mask,
+            zero,
+        ),
+        "naive_margin_uncertainty_pair_unsafe_auprc": _binary_auprc_or_zero(
+            naive_uncertainty_tensor,
+            pair_unsafe_mask,
+            zero,
+        ),
+        "candidate_margin_uncertainty_pair_unsafe_auroc": _binary_auroc_or_zero(
+            candidate_margin_uncertainty_tensor,
+            pair_unsafe_mask,
+            zero,
+        ),
+        "candidate_margin_uncertainty_pair_unsafe_auprc": _binary_auprc_or_zero(
+            candidate_margin_uncertainty_tensor,
+            pair_unsafe_mask,
+            zero,
+        ),
+        "runtime_uncertainty_pair_unsafe_within_scene_auroc": _within_group_binary_metric_or_zero(
+            uncertainty_tensor,
+            pair_unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auroc_or_zero,
+        ),
+        "runtime_uncertainty_pair_unsafe_within_scene_auprc": _within_group_binary_metric_or_zero(
+            uncertainty_tensor,
+            pair_unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auprc_or_zero,
+        ),
+        "calibrated_uncertainty_pair_unsafe_within_scene_auroc": _within_group_binary_metric_or_zero(
+            calibrated_uncertainty_tensor,
+            pair_unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auroc_or_zero,
+        ),
+        "calibrated_uncertainty_pair_unsafe_within_scene_auprc": _within_group_binary_metric_or_zero(
+            calibrated_uncertainty_tensor,
+            pair_unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auprc_or_zero,
+        ),
+        "naive_margin_uncertainty_pair_unsafe_within_scene_auroc": _within_group_binary_metric_or_zero(
+            naive_uncertainty_tensor,
+            pair_unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auroc_or_zero,
+        ),
+        "naive_margin_uncertainty_pair_unsafe_within_scene_auprc": _within_group_binary_metric_or_zero(
+            naive_uncertainty_tensor,
+            pair_unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auprc_or_zero,
+        ),
+        "candidate_margin_uncertainty_pair_unsafe_within_scene_auroc": _within_group_binary_metric_or_zero(
+            candidate_margin_uncertainty_tensor,
+            pair_unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auroc_or_zero,
+        ),
+        "candidate_margin_uncertainty_pair_unsafe_within_scene_auprc": _within_group_binary_metric_or_zero(
+            candidate_margin_uncertainty_tensor,
+            pair_unsafe_mask,
+            scene_id_tensor,
+            zero,
+            _binary_auprc_or_zero,
+        ),
+        "calibrated_uncertainty_scene_adjusted_pair_unsafe_auroc": _binary_auroc_or_zero(
+            calibrated_scene_adjusted,
+            pair_unsafe_mask,
+            zero,
+        ),
+        "calibrated_uncertainty_scene_adjusted_pair_unsafe_auprc": _binary_auprc_or_zero(
+            calibrated_scene_adjusted,
+            pair_unsafe_mask,
+            zero,
+        ),
+        "calibrated_uncertainty_scene_adjusted_pair_unsafe_lift": (
+            calibrated_pair_adjusted_unsafe - calibrated_pair_adjusted_safe
+        ),
+        "calibrated_uncertainty_within_scene_variance_mean": _within_group_variance_mean(
+            calibrated_uncertainty_tensor,
+            scene_id_tensor,
+            zero,
+        ),
+        "runtime_uncertainty_within_scene_variance_mean": _within_group_variance_mean(
+            uncertainty_tensor,
+            scene_id_tensor,
+            zero,
+        ),
+        "naive_margin_uncertainty_within_scene_variance_mean": _within_group_variance_mean(
+            naive_uncertainty_tensor,
+            scene_id_tensor,
+            zero,
+        ),
+        "candidate_margin_uncertainty_within_scene_variance_mean": _within_group_variance_mean(
+            candidate_margin_uncertainty_tensor,
+            scene_id_tensor,
+            zero,
+        ),
+        "calibrated_uncertainty_within_scene_pair_unsafe_gap": _within_group_binary_gap(
+            calibrated_uncertainty_tensor,
+            pair_unsafe_mask,
+            scene_id_tensor,
+            zero,
+        ),
+        "runtime_uncertainty_within_scene_pair_unsafe_gap": _within_group_binary_gap(
+            uncertainty_tensor,
+            pair_unsafe_mask,
+            scene_id_tensor,
+            zero,
+        ),
+        "naive_margin_uncertainty_within_scene_pair_unsafe_gap": _within_group_binary_gap(
+            naive_uncertainty_tensor,
+            pair_unsafe_mask,
+            scene_id_tensor,
+            zero,
+        ),
+        "candidate_margin_uncertainty_within_scene_pair_unsafe_gap": _within_group_binary_gap(
+            candidate_margin_uncertainty_tensor,
+            pair_unsafe_mask,
+            scene_id_tensor,
             zero,
         ),
         "nearest_distance_error_pearson": _pearson_or_zero(nearest_tensor, error_tensor, zero),
@@ -2675,6 +2960,112 @@ def _binary_auprc_or_zero(scores: torch.Tensor, labels: torch.Tensor, zero: torc
     true_positives = ordered_labels.cumsum(dim=0)
     precision = true_positives / ranks
     return (precision * ordered_labels).sum() / positive_count.clamp_min(1e-6)
+
+
+def _within_group_binary_metric_or_zero(
+    scores: torch.Tensor,
+    labels: torch.Tensor,
+    groups: torch.Tensor,
+    zero: torch.Tensor,
+    metric,
+) -> torch.Tensor:
+    scores = scores.reshape(-1)
+    labels = labels.reshape(-1).to(device=scores.device, dtype=torch.bool)
+    groups = groups.reshape(-1).to(device=scores.device)
+    count = min(scores.numel(), labels.numel(), groups.numel())
+    if count < 2:
+        return zero
+    scores = scores[:count]
+    labels = labels[:count]
+    groups = groups[:count]
+    values: list[torch.Tensor] = []
+    for group in groups.unique():
+        mask = groups == group
+        group_labels = labels[mask]
+        if int(mask.to(torch.long).sum().item()) < 2:
+            continue
+        if not bool(group_labels.any().item()) or bool(group_labels.all().item()):
+            continue
+        value = metric(scores[mask], group_labels, zero)
+        if bool(torch.isfinite(value).item()):
+            values.append(value)
+    return torch.stack(values).mean() if values else zero
+
+
+def _within_group_binary_valid_fraction(labels: torch.Tensor, groups: torch.Tensor, zero: torch.Tensor) -> torch.Tensor:
+    labels = labels.reshape(-1).to(dtype=torch.bool)
+    groups = groups.reshape(-1).to(device=labels.device)
+    count = min(labels.numel(), groups.numel())
+    if count == 0:
+        return zero
+    labels = labels[:count]
+    groups = groups[:count]
+    valid_count = 0
+    total_count = 0
+    for group in groups.unique():
+        mask = groups == group
+        group_labels = labels[mask]
+        if int(mask.to(torch.long).sum().item()) < 2:
+            continue
+        total_count += 1
+        if bool(group_labels.any().item()) and not bool(group_labels.all().item()):
+            valid_count += 1
+    if total_count == 0:
+        return zero
+    return torch.tensor(float(valid_count) / float(total_count), dtype=zero.dtype, device=zero.device)
+
+
+def _scene_adjusted_scores(scores: torch.Tensor, groups: torch.Tensor) -> torch.Tensor:
+    scores = scores.reshape(-1)
+    groups = groups.reshape(-1).to(device=scores.device)
+    count = min(scores.numel(), groups.numel())
+    if count == 0:
+        return scores.new_zeros((0,))
+    scores = scores[:count]
+    groups = groups[:count]
+    adjusted = torch.empty_like(scores)
+    for group in groups.unique():
+        mask = groups == group
+        adjusted[mask] = scores[mask] - scores[mask].mean()
+    return adjusted
+
+
+def _within_group_variance_mean(scores: torch.Tensor, groups: torch.Tensor, zero: torch.Tensor) -> torch.Tensor:
+    scores = scores.reshape(-1)
+    groups = groups.reshape(-1).to(device=scores.device)
+    count = min(scores.numel(), groups.numel())
+    if count < 2:
+        return zero
+    scores = scores[:count]
+    groups = groups[:count]
+    values: list[torch.Tensor] = []
+    for group in groups.unique():
+        mask = groups == group
+        if int(mask.to(torch.long).sum().item()) < 2:
+            continue
+        values.append(scores[mask].var(unbiased=False))
+    return torch.stack(values).mean() if values else zero
+
+
+def _within_group_binary_gap(scores: torch.Tensor, labels: torch.Tensor, groups: torch.Tensor, zero: torch.Tensor) -> torch.Tensor:
+    scores = scores.reshape(-1)
+    labels = labels.reshape(-1).to(device=scores.device, dtype=torch.bool)
+    groups = groups.reshape(-1).to(device=scores.device)
+    count = min(scores.numel(), labels.numel(), groups.numel())
+    if count < 2:
+        return zero
+    scores = scores[:count]
+    labels = labels[:count]
+    groups = groups[:count]
+    values: list[torch.Tensor] = []
+    for group in groups.unique():
+        mask = groups == group
+        group_labels = labels[mask]
+        if not bool(group_labels.any().item()) or bool(group_labels.all().item()):
+            continue
+        group_scores = scores[mask]
+        values.append(group_scores[group_labels].mean() - group_scores[~group_labels].mean())
+    return torch.stack(values).mean() if values else zero
 
 
 def _paired_endpoint_error_structure_metrics(
