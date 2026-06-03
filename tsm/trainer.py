@@ -81,7 +81,12 @@ def save_checkpoint(path: Path, model: Self, optimizer: torch.optim.Optimizer | 
 def _load_model_state(model: Self, state: dict[str, torch.Tensor]) -> None:
     result = model.load_state_dict(state, strict=False)
     allowed_missing = {"defs.file_query.weight", "defs.position_read_logits"}
-    allowed_missing_prefixes = ("active_file_gate.", "active_file_expectation.", "active_file_dynamics.")
+    allowed_missing_prefixes = (
+        "active_file_gate.",
+        "active_file_expectation.",
+        "active_file_dynamics.",
+        "active_file_calibration.",
+    )
     missing = set(result.missing_keys)
     unexpected = set(result.unexpected_keys)
     disallowed_missing = {
@@ -159,7 +164,10 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
             try:
                 optimizer.load_state_dict(payload["optimizer_state"])
             except ValueError:
-                if "defs.file_query.weight" not in payload["model_state"]:
+                if (
+                    "defs.file_query.weight" not in payload["model_state"]
+                    or "active_file_calibration.0.weight" not in payload["model_state"]
+                ):
                     pass
                 else:
                     raise
@@ -468,12 +476,19 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                             handle.write(f"- final_reappeared_dynamics_runtime_confidence_actual_endpoint_error_p90: {last_metrics[f'{calibration_prefix}actual_endpoint_error_p90']:.6f}\n")
                             handle.write(f"- final_reappeared_dynamics_runtime_confidence_runtime_uncertainty_mean: {last_metrics[f'{calibration_prefix}runtime_uncertainty_mean']:.6f}\n")
                             handle.write(f"- final_reappeared_dynamics_runtime_confidence_runtime_confidence_mean: {last_metrics[f'{calibration_prefix}runtime_confidence_mean']:.6f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_calibrated_uncertainty_mean: {last_metrics[f'{calibration_prefix}calibrated_uncertainty_mean']:.6f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_calibrated_confidence_mean: {last_metrics[f'{calibration_prefix}calibrated_confidence_mean']:.6f}\n")
                             handle.write(f"- final_reappeared_dynamics_runtime_confidence_uncertainty_error_pearson: {last_metrics[f'{calibration_prefix}runtime_uncertainty_error_pearson']:.3f}\n")
                             handle.write(f"- final_reappeared_dynamics_runtime_confidence_uncertainty_error_spearman: {last_metrics[f'{calibration_prefix}runtime_uncertainty_error_spearman']:.3f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_calibrated_uncertainty_error_pearson: {last_metrics[f'{calibration_prefix}calibrated_uncertainty_error_pearson']:.3f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_calibrated_uncertainty_error_spearman: {last_metrics[f'{calibration_prefix}calibrated_uncertainty_error_spearman']:.3f}\n")
                             handle.write(f"- final_reappeared_dynamics_runtime_confidence_naive_uncertainty_error_pearson: {last_metrics[f'{calibration_prefix}naive_margin_uncertainty_error_pearson']:.3f}\n")
                             handle.write(f"- final_reappeared_dynamics_runtime_confidence_correct_decline_confidence: {last_metrics[f'{calibration_prefix}runtime_confidence_correct_decline_mean']:.6f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_calibrated_correct_decline_confidence: {last_metrics[f'{calibration_prefix}calibrated_confidence_correct_decline_mean']:.6f}\n")
                             handle.write(f"- final_reappeared_dynamics_runtime_confidence_forced_correct_confidence: {last_metrics[f'{calibration_prefix}runtime_confidence_forced_correct_mean']:.6f}\n")
                             handle.write(f"- final_reappeared_dynamics_runtime_confidence_drop_on_correct_declines: {last_metrics[f'{calibration_prefix}runtime_confidence_drop_on_correct_declines']:.6f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_calibrated_drop_on_correct_declines: {last_metrics[f'{calibration_prefix}calibrated_confidence_drop_on_correct_declines']:.6f}\n")
+                            handle.write(f"- final_reappeared_dynamics_runtime_confidence_calibrated_high_error_lift: {last_metrics[f'{calibration_prefix}calibrated_uncertainty_high_error_lift']:.6f}\n")
                             handle.write(f"- final_reappeared_dynamics_runtime_confidence_true_position_usage: {last_metrics[f'{calibration_prefix}confidence_true_position_usage']:.1f}\n")
                             handle.write(f"- final_reappeared_dynamics_runtime_confidence_endpoint_error_usage: {last_metrics[f'{calibration_prefix}confidence_endpoint_error_usage']:.1f}\n")
                             handle.write(f"- final_reappeared_dynamics_runtime_confidence_object_file_id_usage: {last_metrics[f'{calibration_prefix}confidence_object_file_id_usage']:.1f}\n")
@@ -497,6 +512,8 @@ def train(cfg: TrainConfig, device_name: str = "cuda", resume: str | None = None
                         handle.write(f"- final_active_file_expectation_hard_loss: {last_metrics['active_file_expectation_hard']:.6f}\n")
                     if "active_file_dynamics" in last_metrics:
                         handle.write(f"- final_active_file_dynamics_loss: {last_metrics['active_file_dynamics']:.6f}\n")
+                    if "active_file_calibration" in last_metrics:
+                        handle.write(f"- final_active_file_calibration_loss: {last_metrics['active_file_calibration']:.6f}\n")
                 if "reappeared_active_query_file_candidate_instance_match_accuracy" in last_metrics:
                     handle.write(f"- final_reappeared_active_query_file_match_accuracy: {last_metrics['reappeared_active_query_file_candidate_instance_match_accuracy']:.3f}\n")
                     handle.write(f"- final_reappeared_active_query_file_hard_match_accuracy: {last_metrics['reappeared_active_query_file_candidate_instance_hard_match_accuracy']:.3f}\n")

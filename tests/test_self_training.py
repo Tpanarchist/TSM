@@ -6,6 +6,9 @@ from tsm.self_field import (
     Self,
     _active_file_candidate_mask,
     _active_file_ballistic_position,
+    _active_file_calibration_features,
+    _active_file_calibration_input_dim,
+    _active_file_calibration_uncertainty,
     _active_file_dynamics_features,
     _active_file_dynamics_input_dim,
     _active_file_dynamics_position,
@@ -70,6 +73,7 @@ def test_forward_train_returns_loss_dict_and_images():
         "active_file_expectation_pair",
         "active_file_expectation_hard",
         "active_file_dynamics",
+        "active_file_calibration",
         "learned_active_file_gate",
     }
     assert set(out.diagnostics) >= {
@@ -278,6 +282,39 @@ def test_active_file_dynamics_predicts_position_shape():
 
     assert position.shape == (2, 2)
     assert torch.allclose(position, projected)
+
+
+def test_active_file_calibration_predicts_uncertainty_shape():
+    cfg = TsmConfig(
+        d_model=32,
+        workspace_latents=8,
+        contexts=3,
+        definitions_per_context=4,
+        image_size=16,
+        image_channels=1,
+        patch_size=4,
+        attention_heads=4,
+        inference_steps=1,
+        active_file_expectation_trajectory_features=True,
+        object_slot_count=2,
+    )
+    model = Self(cfg)
+    dynamics_features = torch.rand(2, _active_file_dynamics_input_dim(cfg))
+    features = _active_file_calibration_features(
+        dynamics_features,
+        predicted_positions=torch.tensor([[3.0, 4.0], [12.0, 6.0]]),
+        slot_positions=torch.tensor([[[3.0, 4.0], [12.0, 6.0]], [[12.0, 6.0], [3.0, 4.0]]]),
+        slot_valid=torch.tensor([[True, True], [True, True]]),
+        slot_occupancy=torch.tensor([[0.9, 0.8], [0.7, 0.6]]),
+        cfg=cfg,
+        reference_positions=torch.tensor([[2.5, 4.0], [11.0, 6.0]]),
+        reference_valid=torch.tensor([True, True]),
+    )
+    uncertainty = _active_file_calibration_uncertainty(model.active_file_calibration, features)
+
+    assert features.shape == (2, _active_file_calibration_input_dim(cfg))
+    assert uncertainty.shape == (2,)
+    assert torch.all((uncertainty >= 0.0) & (uncertainty <= 1.0))
 
 
 def test_object_memory_tracks_velocity_and_phase():
@@ -518,12 +555,15 @@ def test_all_track_runtime_confidence_reports_error_calibration_without_label_le
         cfg=cfg,
         reference_positions=torch.tensor([[0.0, 0.0], [4.1, 0.0], [8.0, 0.0]]),
         reference_valid=torch.tensor([True, True, True]),
+        calibrated_uncertainty=torch.tensor([0.05, 0.25, 0.70]),
     )
 
     assert metrics["object_count"].item() == 3.0
     assert metrics["decision_coverage_fraction"].item() == 1.0
     assert metrics["runtime_uncertainty_error_pearson"].item() > 0.5
     assert metrics["runtime_uncertainty_error_spearman"].item() > 0.5
+    assert metrics["calibrated_uncertainty_error_pearson"].item() > 0.5
+    assert metrics["calibrated_uncertainty_high_error_lift"].item() > 0.0
     assert metrics["runtime_confidence_drop_on_correct_declines"].item() > 0.0
     assert metrics["confidence_true_position_usage"].item() == 0.0
     assert metrics["confidence_endpoint_error_usage"].item() == 0.0
@@ -864,11 +904,18 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_dynamics_runtime_confidence_actual_endpoint_error_p90",
         "reappeared_dynamics_runtime_confidence_runtime_uncertainty_mean",
         "reappeared_dynamics_runtime_confidence_runtime_confidence_mean",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_mean",
+        "reappeared_dynamics_runtime_confidence_calibrated_confidence_mean",
         "reappeared_dynamics_runtime_confidence_runtime_uncertainty_error_pearson",
         "reappeared_dynamics_runtime_confidence_runtime_uncertainty_error_spearman",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_error_pearson",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_error_spearman",
         "reappeared_dynamics_runtime_confidence_naive_margin_uncertainty_error_pearson",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_high_error_lift",
         "reappeared_dynamics_runtime_confidence_runtime_confidence_correct_decline_mean",
+        "reappeared_dynamics_runtime_confidence_calibrated_confidence_correct_decline_mean",
         "reappeared_dynamics_runtime_confidence_runtime_confidence_drop_on_correct_declines",
+        "reappeared_dynamics_runtime_confidence_calibrated_confidence_drop_on_correct_declines",
         "reappeared_dynamics_runtime_confidence_confidence_true_position_usage",
         "reappeared_dynamics_runtime_confidence_confidence_endpoint_error_usage",
         "reappeared_dynamics_runtime_confidence_confidence_object_file_id_usage",

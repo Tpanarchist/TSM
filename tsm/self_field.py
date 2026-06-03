@@ -256,6 +256,10 @@ def _active_file_dynamics_input_dim(cfg: TsmConfig) -> int:
     return _active_file_trajectory_width(cfg) + cfg.contexts + 2
 
 
+def _active_file_calibration_input_dim(cfg: TsmConfig) -> int:
+    return _active_file_dynamics_input_dim(cfg) + 10
+
+
 def _active_file_trajectory_features(
     batch: dict[str, torch.Tensor],
     memory_read,
@@ -408,6 +412,124 @@ def _active_file_dynamics_position(
     base_position = projected_position[:count].to(device=dynamics_features.device, dtype=dynamics_features.dtype) / scale
     delta = torch.tanh(dynamics(dynamics_features[:count])) * float(cfg.active_file_dynamics_delta_scale)
     return (base_position + delta).clamp(0.0, 1.0) * scale
+
+
+def _slot_candidate_geometry_features(
+    predicted_positions: torch.Tensor,
+    slot_positions: torch.Tensor,
+    slot_valid: torch.Tensor,
+    slot_occupancy: torch.Tensor,
+    cfg: TsmConfig,
+    reference_positions: torch.Tensor | None = None,
+    reference_valid: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if predicted_positions.numel() == 0:
+        return predicted_positions.new_zeros((0, 10))
+    count = min(predicted_positions.shape[0], slot_positions.shape[0], slot_valid.shape[0])
+    if count == 0:
+        return predicted_positions.new_zeros((0, 10))
+    dtype = predicted_positions.dtype
+    device = predicted_positions.device
+    scale = float(max(1, cfg.image_size))
+    predicted_positions = predicted_positions[:count].to(device=device, dtype=dtype)
+    slot_positions = slot_positions[:count].to(device=device, dtype=dtype)
+    slot_valid = slot_valid[:count].to(device=device, dtype=torch.bool)
+    if slot_occupancy.numel() > 0:
+        slot_occupancy = slot_occupancy[:count].to(device=device, dtype=dtype)
+    else:
+        slot_occupancy = torch.zeros(slot_valid.shape, dtype=dtype, device=device)
+    if reference_positions is not None and reference_positions.numel() > 0:
+        reference_positions = reference_positions[:count].to(device=device, dtype=dtype)
+    else:
+        reference_positions = None
+    if reference_valid is not None and reference_valid.numel() > 0:
+        reference_valid = reference_valid[:count].to(device=device, dtype=torch.bool)
+    else:
+        reference_valid = None
+
+    rows: list[torch.Tensor] = []
+    for row in range(count):
+        valid_slots = torch.nonzero(slot_valid[row], as_tuple=False).flatten()
+        if valid_slots.numel() >= 2:
+            distances = torch.cdist(
+                predicted_positions[row].view(1, 2),
+                slot_positions[row, valid_slots],
+            ).flatten() / scale
+            sorted_distances, sorted_local = distances.sort()
+            nearest = sorted_distances[0]
+            second = sorted_distances[1]
+            margin = (second - nearest).clamp_min(0.0)
+            relative_margin = (margin / second.clamp_min(1e-6)).clamp(0.0, 1.0)
+            nearest_slot = int(valid_slots[sorted_local[0]].item())
+            nearest_occupancy = slot_occupancy[row, nearest_slot].clamp(0.0, 1.0)
+        else:
+            nearest = predicted_positions.new_zeros(())
+            second = predicted_positions.new_zeros(())
+            margin = predicted_positions.new_zeros(())
+            relative_margin = predicted_positions.new_zeros(())
+            nearest_occupancy = predicted_positions.new_zeros(())
+
+        occupancy = slot_occupancy[row] * slot_valid[row].to(dtype)
+        occupancy_sum = occupancy.sum().clamp_min(1e-6)
+        probs = occupancy / occupancy_sum
+        entropy = -(probs * probs.clamp_min(1e-8).log()).sum()
+        if probs.numel() > 1:
+            entropy = entropy / torch.log(torch.tensor(float(probs.numel()), dtype=dtype, device=device)).clamp_min(1e-6)
+        load = slot_valid[row].to(dtype).sum() / float(max(1, cfg.object_slot_count))
+        if reference_positions is not None and reference_valid is not None and bool(reference_valid[row].item()):
+            reference_disagreement = (predicted_positions[row] - reference_positions[row]).norm() / scale
+        else:
+            reference_disagreement = predicted_positions.new_zeros(())
+        rows.append(torch.stack([
+            predicted_positions[row, 0] / scale,
+            predicted_positions[row, 1] / scale,
+            nearest.clamp(0.0, 1.0),
+            second.clamp(0.0, 1.0),
+            margin.clamp(0.0, 1.0),
+            relative_margin.clamp(0.0, 1.0),
+            nearest_occupancy,
+            entropy.clamp(0.0, 1.0),
+            load.clamp(0.0, 1.0),
+            reference_disagreement.clamp(0.0, 1.0),
+        ]))
+    return torch.stack(rows)
+
+
+def _active_file_calibration_features(
+    dynamics_features: torch.Tensor,
+    predicted_positions: torch.Tensor,
+    slot_positions: torch.Tensor,
+    slot_valid: torch.Tensor,
+    slot_occupancy: torch.Tensor,
+    cfg: TsmConfig,
+    reference_positions: torch.Tensor | None = None,
+    reference_valid: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if dynamics_features.numel() == 0 or predicted_positions.numel() == 0:
+        return dynamics_features.new_zeros((0, _active_file_calibration_input_dim(cfg)))
+    geometry = _slot_candidate_geometry_features(
+        predicted_positions.to(device=dynamics_features.device, dtype=dynamics_features.dtype),
+        slot_positions.to(device=dynamics_features.device, dtype=dynamics_features.dtype),
+        slot_valid.to(device=dynamics_features.device),
+        slot_occupancy.to(device=dynamics_features.device, dtype=dynamics_features.dtype),
+        cfg,
+        reference_positions=(
+            reference_positions.to(device=dynamics_features.device, dtype=dynamics_features.dtype)
+            if reference_positions is not None
+            else None
+        ),
+        reference_valid=reference_valid.to(device=dynamics_features.device) if reference_valid is not None else None,
+    )
+    count = min(dynamics_features.shape[0], geometry.shape[0])
+    if count == 0:
+        return dynamics_features.new_zeros((0, _active_file_calibration_input_dim(cfg)))
+    return torch.cat([dynamics_features[:count], geometry[:count]], dim=-1)
+
+
+def _active_file_calibration_uncertainty(calibration: nn.Module, features: torch.Tensor) -> torch.Tensor:
+    if features.numel() == 0:
+        return torch.zeros((0,), dtype=features.dtype, device=features.device)
+    return torch.sigmoid(calibration(features)).view(-1)
 
 
 def _active_file_expectation(
@@ -1426,6 +1548,7 @@ def _all_track_runtime_confidence_metrics(
     cfg: TsmConfig,
     reference_positions: torch.Tensor | None = None,
     reference_valid: torch.Tensor | None = None,
+    calibrated_uncertainty: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     dtype = predicted_positions.dtype if predicted_positions.is_floating_point() else torch.float32
     device = predicted_positions.device
@@ -1437,12 +1560,16 @@ def _all_track_runtime_confidence_metrics(
         "actual_endpoint_error_p90": zero,
         "runtime_uncertainty_mean": zero,
         "runtime_confidence_mean": zero,
+        "calibrated_uncertainty_mean": zero,
+        "calibrated_confidence_mean": zero,
         "naive_margin_uncertainty_mean": zero,
         "naive_margin_confidence_mean": zero,
         "nearest_distance_mean": zero,
         "reference_disagreement_mean": zero,
         "runtime_uncertainty_error_pearson": zero,
         "runtime_uncertainty_error_spearman": zero,
+        "calibrated_uncertainty_error_pearson": zero,
+        "calibrated_uncertainty_error_spearman": zero,
         "naive_margin_uncertainty_error_pearson": zero,
         "naive_margin_uncertainty_error_spearman": zero,
         "nearest_distance_error_pearson": zero,
@@ -1458,12 +1585,30 @@ def _all_track_runtime_confidence_metrics(
         "runtime_uncertainty_wrong_decline_mean": zero,
         "runtime_uncertainty_forced_correct_mean": zero,
         "runtime_uncertainty_forced_wrong_mean": zero,
+        "calibrated_uncertainty_correct_decline_mean": zero,
+        "calibrated_uncertainty_wrong_decline_mean": zero,
+        "calibrated_uncertainty_forced_correct_mean": zero,
+        "calibrated_uncertainty_forced_wrong_mean": zero,
         "runtime_confidence_correct_decline_mean": zero,
         "runtime_confidence_wrong_decline_mean": zero,
         "runtime_confidence_forced_correct_mean": zero,
         "runtime_confidence_forced_wrong_mean": zero,
+        "calibrated_confidence_correct_decline_mean": zero,
+        "calibrated_confidence_wrong_decline_mean": zero,
+        "calibrated_confidence_forced_correct_mean": zero,
+        "calibrated_confidence_forced_wrong_mean": zero,
         "runtime_confidence_drop_on_correct_declines": zero,
+        "calibrated_confidence_drop_on_correct_declines": zero,
         "naive_confidence_drop_on_correct_declines": zero,
+        "runtime_uncertainty_high_error_mean": zero,
+        "runtime_uncertainty_low_error_mean": zero,
+        "runtime_uncertainty_high_error_lift": zero,
+        "calibrated_uncertainty_high_error_mean": zero,
+        "calibrated_uncertainty_low_error_mean": zero,
+        "calibrated_uncertainty_high_error_lift": zero,
+        "naive_margin_uncertainty_high_error_mean": zero,
+        "naive_margin_uncertainty_low_error_mean": zero,
+        "naive_margin_uncertainty_high_error_lift": zero,
         "confidence_true_position_usage": zero,
         "confidence_endpoint_error_usage": zero,
         "confidence_object_id_usage": zero,
@@ -1516,12 +1661,18 @@ def _all_track_runtime_confidence_metrics(
         reference_valid = reference_valid[:file_count].to(device=device, dtype=torch.bool)
     else:
         reference_valid = None
+    if calibrated_uncertainty is not None and calibrated_uncertainty.numel() > 0:
+        calibrated_uncertainty = calibrated_uncertainty[:file_count].reshape(file_count).to(device=device, dtype=dtype)
+    else:
+        calibrated_uncertainty = None
 
     scale = float(max(1, cfg.image_size))
     age_scale = float(max(1.0, cfg.active_file_candidate_max_age))
     actual_errors: list[torch.Tensor] = []
     runtime_uncertainties: list[torch.Tensor] = []
     runtime_confidences: list[torch.Tensor] = []
+    calibrated_uncertainties: list[torch.Tensor] = []
+    calibrated_confidences: list[torch.Tensor] = []
     naive_uncertainties: list[torch.Tensor] = []
     naive_confidences: list[torch.Tensor] = []
     nearest_distances: list[torch.Tensor] = []
@@ -1605,6 +1756,11 @@ def _all_track_runtime_confidence_metrics(
                 + 0.25 * reference_disagreement.clamp(0.0, 1.0)
             )
             runtime_confidence = 1.0 / (1.0 + runtime_uncertainty.clamp_min(0.0))
+            if calibrated_uncertainty is not None:
+                current_calibrated_uncertainty = calibrated_uncertainty[file_idx].clamp(0.0, 1.0)
+            else:
+                current_calibrated_uncertainty = zero
+            current_calibrated_confidence = 1.0 / (1.0 + current_calibrated_uncertainty.clamp_min(0.0))
 
             true_slot = true_object_to_slot.get(object_idx)
             if true_slot is None:
@@ -1616,6 +1772,8 @@ def _all_track_runtime_confidence_metrics(
             actual_errors.append(actual_error)
             runtime_uncertainties.append(runtime_uncertainty)
             runtime_confidences.append(runtime_confidence)
+            calibrated_uncertainties.append(current_calibrated_uncertainty)
+            calibrated_confidences.append(current_calibrated_confidence)
             naive_uncertainties.append(naive_uncertainty)
             naive_confidences.append(naive_confidence)
             nearest_distances.append(nearest_distance)
@@ -1636,6 +1794,8 @@ def _all_track_runtime_confidence_metrics(
     error_tensor = torch.stack(actual_errors)
     uncertainty_tensor = torch.stack(runtime_uncertainties)
     confidence_tensor = torch.stack(runtime_confidences)
+    calibrated_uncertainty_tensor = torch.stack(calibrated_uncertainties)
+    calibrated_confidence_tensor = torch.stack(calibrated_confidences)
     naive_uncertainty_tensor = torch.stack(naive_uncertainties)
     naive_confidence_tensor = torch.stack(naive_confidences)
     nearest_tensor = torch.stack(nearest_distances)
@@ -1651,8 +1811,23 @@ def _all_track_runtime_confidence_metrics(
     expected_decisions = float(max(1, query_count * object_count))
     forced_correct_mean = _masked_mean(confidence_tensor, forced_correct_tensor.bool(), dtype)
     correct_decline_confidence = _masked_mean(confidence_tensor, correct_decline_tensor.bool(), dtype)
+    calibrated_forced_correct_mean = _masked_mean(calibrated_confidence_tensor, forced_correct_tensor.bool(), dtype)
+    calibrated_correct_decline_confidence = _masked_mean(
+        calibrated_confidence_tensor,
+        correct_decline_tensor.bool(),
+        dtype,
+    )
     naive_forced_correct_mean = _masked_mean(naive_confidence_tensor, forced_correct_tensor.bool(), dtype)
     naive_correct_decline_confidence = _masked_mean(naive_confidence_tensor, correct_decline_tensor.bool(), dtype)
+    high_error_threshold = _quantile_or_zero(error_tensor, 0.75, zero)
+    high_error_mask = error_tensor >= high_error_threshold
+    low_error_mask = ~high_error_mask
+    runtime_high = _masked_mean(uncertainty_tensor, high_error_mask, dtype)
+    runtime_low = _masked_mean(uncertainty_tensor, low_error_mask, dtype)
+    calibrated_high = _masked_mean(calibrated_uncertainty_tensor, high_error_mask, dtype)
+    calibrated_low = _masked_mean(calibrated_uncertainty_tensor, low_error_mask, dtype)
+    naive_high = _masked_mean(naive_uncertainty_tensor, high_error_mask, dtype)
+    naive_low = _masked_mean(naive_uncertainty_tensor, low_error_mask, dtype)
     return {
         "object_count": torch.tensor(float(object_count), dtype=dtype, device=device),
         "decision_coverage_fraction": torch.tensor(float(error_tensor.numel()) / expected_decisions, dtype=dtype, device=device),
@@ -1660,12 +1835,16 @@ def _all_track_runtime_confidence_metrics(
         "actual_endpoint_error_p90": _quantile_or_zero(error_tensor, 0.90, zero),
         "runtime_uncertainty_mean": uncertainty_tensor.mean(),
         "runtime_confidence_mean": confidence_tensor.mean(),
+        "calibrated_uncertainty_mean": calibrated_uncertainty_tensor.mean(),
+        "calibrated_confidence_mean": calibrated_confidence_tensor.mean(),
         "naive_margin_uncertainty_mean": naive_uncertainty_tensor.mean(),
         "naive_margin_confidence_mean": naive_confidence_tensor.mean(),
         "nearest_distance_mean": nearest_tensor.mean(),
         "reference_disagreement_mean": reference_tensor.mean(),
         "runtime_uncertainty_error_pearson": _pearson_or_zero(uncertainty_tensor, error_tensor, zero),
         "runtime_uncertainty_error_spearman": _spearman_or_zero(uncertainty_tensor, error_tensor, zero),
+        "calibrated_uncertainty_error_pearson": _pearson_or_zero(calibrated_uncertainty_tensor, error_tensor, zero),
+        "calibrated_uncertainty_error_spearman": _spearman_or_zero(calibrated_uncertainty_tensor, error_tensor, zero),
         "naive_margin_uncertainty_error_pearson": _pearson_or_zero(naive_uncertainty_tensor, error_tensor, zero),
         "naive_margin_uncertainty_error_spearman": _spearman_or_zero(naive_uncertainty_tensor, error_tensor, zero),
         "nearest_distance_error_pearson": _pearson_or_zero(nearest_tensor, error_tensor, zero),
@@ -1681,12 +1860,32 @@ def _all_track_runtime_confidence_metrics(
         "runtime_uncertainty_wrong_decline_mean": _masked_mean(uncertainty_tensor, wrong_decline_tensor.bool(), dtype),
         "runtime_uncertainty_forced_correct_mean": _masked_mean(uncertainty_tensor, forced_correct_tensor.bool(), dtype),
         "runtime_uncertainty_forced_wrong_mean": _masked_mean(uncertainty_tensor, forced_wrong_tensor.bool(), dtype),
+        "calibrated_uncertainty_correct_decline_mean": _masked_mean(calibrated_uncertainty_tensor, correct_decline_tensor.bool(), dtype),
+        "calibrated_uncertainty_wrong_decline_mean": _masked_mean(calibrated_uncertainty_tensor, wrong_decline_tensor.bool(), dtype),
+        "calibrated_uncertainty_forced_correct_mean": _masked_mean(calibrated_uncertainty_tensor, forced_correct_tensor.bool(), dtype),
+        "calibrated_uncertainty_forced_wrong_mean": _masked_mean(calibrated_uncertainty_tensor, forced_wrong_tensor.bool(), dtype),
         "runtime_confidence_correct_decline_mean": correct_decline_confidence,
         "runtime_confidence_wrong_decline_mean": _masked_mean(confidence_tensor, wrong_decline_tensor.bool(), dtype),
         "runtime_confidence_forced_correct_mean": forced_correct_mean,
         "runtime_confidence_forced_wrong_mean": _masked_mean(confidence_tensor, forced_wrong_tensor.bool(), dtype),
+        "calibrated_confidence_correct_decline_mean": calibrated_correct_decline_confidence,
+        "calibrated_confidence_wrong_decline_mean": _masked_mean(calibrated_confidence_tensor, wrong_decline_tensor.bool(), dtype),
+        "calibrated_confidence_forced_correct_mean": calibrated_forced_correct_mean,
+        "calibrated_confidence_forced_wrong_mean": _masked_mean(calibrated_confidence_tensor, forced_wrong_tensor.bool(), dtype),
         "runtime_confidence_drop_on_correct_declines": forced_correct_mean - correct_decline_confidence,
+        "calibrated_confidence_drop_on_correct_declines": (
+            calibrated_forced_correct_mean - calibrated_correct_decline_confidence
+        ),
         "naive_confidence_drop_on_correct_declines": naive_forced_correct_mean - naive_correct_decline_confidence,
+        "runtime_uncertainty_high_error_mean": runtime_high,
+        "runtime_uncertainty_low_error_mean": runtime_low,
+        "runtime_uncertainty_high_error_lift": runtime_high - runtime_low,
+        "calibrated_uncertainty_high_error_mean": calibrated_high,
+        "calibrated_uncertainty_low_error_mean": calibrated_low,
+        "calibrated_uncertainty_high_error_lift": calibrated_high - calibrated_low,
+        "naive_margin_uncertainty_high_error_mean": naive_high,
+        "naive_margin_uncertainty_low_error_mean": naive_low,
+        "naive_margin_uncertainty_high_error_lift": naive_high - naive_low,
         "confidence_true_position_usage": zero,
         "confidence_endpoint_error_usage": zero,
         "confidence_object_id_usage": zero,
@@ -2691,6 +2890,15 @@ class Self(nn.Module):
         )
         nn.init.zeros_(self.active_file_dynamics[-1].weight)
         nn.init.zeros_(self.active_file_dynamics[-1].bias)
+        calibration_input = _active_file_calibration_input_dim(self.cfg)
+        calibration_hidden = max(16, calibration_input)
+        self.active_file_calibration = nn.Sequential(
+            nn.Linear(calibration_input, calibration_hidden),
+            nn.GELU(),
+            nn.Linear(calibration_hidden, 1),
+        )
+        nn.init.zeros_(self.active_file_calibration[-1].weight)
+        nn.init.zeros_(self.active_file_calibration[-1].bias)
         self.drive_dynamics = DriveDynamics()
         self.memory = Memory()
         self.evidence = EvidenceAccumulator()
@@ -2877,6 +3085,7 @@ class Self(nn.Module):
         active_file_expectation_pair = _zero_like_scalar(image_t)
         active_file_expectation_hard = _zero_like_scalar(image_t)
         active_file_dynamics = _zero_like_scalar(image_t)
+        active_file_calibration = _zero_like_scalar(image_t)
         learned_active_file_gate = _zero_like_scalar(image_t)
         needs_reappearance_target = (
             self.cfg.reappearance_alignment_weight > 0.0
@@ -2885,6 +3094,7 @@ class Self(nn.Module):
             or self.cfg.active_file_query_weight > 0.0
             or self.cfg.active_file_expectation_weight > 0.0
             or self.cfg.active_file_dynamics_weight > 0.0
+            or self.cfg.active_file_calibration_weight > 0.0
             or self.cfg.learned_active_file_gate_weight > 0.0
         )
         if needs_reappearance_target and "visible_tp1" in batch and "occluded_t" in batch:
@@ -2939,6 +3149,7 @@ class Self(nn.Module):
                 dynamics_valid = None
                 needs_dynamics_position = (
                     self.cfg.active_file_dynamics_weight > 0.0
+                    or self.cfg.active_file_calibration_weight > 0.0
                     or self.cfg.active_file_expectation_dynamics_features
                 )
                 if needs_dynamics_position and "object_position_tp1" in batch:
@@ -2985,6 +3196,49 @@ class Self(nn.Module):
                         active_file_dynamics = F.smooth_l1_loss(
                             dynamics_position[dynamics_valid] / scale,
                             target_position[dynamics_valid] / scale,
+                        )
+                    if (
+                        self.cfg.active_file_calibration_weight > 0.0
+                        and self.cfg.object_slot_count > 0
+                        and bool(dynamics_valid.any().item())
+                    ):
+                        target_position = batch["object_position_tp1"].to(device=image_t.device, dtype=image_t.dtype)[
+                            reappeared_for_alignment
+                        ]
+                        slot_output_for_calibration = self.object_slots(image_tp1[reappeared_for_alignment])
+                        ballistic_position, ballistic_valid = _active_file_ballistic_position(
+                            memory_read,
+                            batch,
+                            reappeared_for_alignment,
+                            self.cfg,
+                            image_t.dtype,
+                            image_t.device,
+                        )
+                        calibration_features = _active_file_calibration_features(
+                            dynamics_features,
+                            dynamics_position,
+                            slot_output_for_calibration.position.to(image_t.dtype),
+                            slot_output_for_calibration.valid,
+                            slot_output_for_calibration.occupancy.to(image_t.dtype),
+                            self.cfg,
+                            reference_positions=ballistic_position,
+                            reference_valid=ballistic_valid,
+                        )
+                        if self.cfg.active_file_calibration_detach_inputs:
+                            calibration_features = calibration_features.detach()
+                            dynamics_position_for_error = dynamics_position.detach()
+                        else:
+                            dynamics_position_for_error = dynamics_position
+                        calibration_uncertainty = _active_file_calibration_uncertainty(
+                            self.active_file_calibration,
+                            calibration_features,
+                        )
+                        endpoint_error = (
+                            dynamics_position_for_error[dynamics_valid] - target_position[dynamics_valid]
+                        ).norm(dim=-1) / float(max(1, self.cfg.image_size))
+                        active_file_calibration = F.smooth_l1_loss(
+                            calibration_uncertainty[dynamics_valid].clamp(0.0, 1.0),
+                            endpoint_error.detach().clamp(0.0, 1.0),
                         )
                 needs_file_expectation = (
                     self.cfg.active_file_expectation_weight > 0.0
@@ -3194,6 +3448,7 @@ class Self(nn.Module):
             "active_file_expectation_pair": active_file_expectation_pair,
             "active_file_expectation_hard": active_file_expectation_hard,
             "active_file_dynamics": active_file_dynamics,
+            "active_file_calibration": active_file_calibration,
             "learned_active_file_gate": learned_active_file_gate,
         }
         diagnostics = {
@@ -3570,8 +3825,10 @@ class Self(nn.Module):
                     ballistic_position = None
                     ballistic_valid = None
                     projected_position = None
+                    dynamics_features = None
                     needs_dynamics_position = (
                         self.cfg.active_file_dynamics_weight > 0.0
+                        or self.cfg.active_file_calibration_weight > 0.0
                         or self.cfg.active_file_expectation_dynamics_features
                     )
                     if needs_dynamics_position and "object_position_tp1" in batch:
@@ -4017,6 +4274,30 @@ class Self(nn.Module):
                             and dynamics_position is not None
                             and dynamics_valid is not None
                         ):
+                            calibrated_uncertainty = None
+                            if dynamics_features is not None:
+                                calibration_features = _active_file_calibration_features(
+                                    dynamics_features.detach(),
+                                    dynamics_position.detach().to(image_t.dtype),
+                                    slot_output.position.to(image_t.dtype),
+                                    slot_output.valid,
+                                    slot_output.occupancy.to(image_t.dtype),
+                                    self.cfg,
+                                    reference_positions=(
+                                        ballistic_position.detach().to(image_t.dtype)
+                                        if ballistic_position is not None
+                                        else None
+                                    ),
+                                    reference_valid=ballistic_valid if ballistic_valid is not None else None,
+                                )
+                                calibrated_uncertainty = _active_file_calibration_uncertainty(
+                                    self.active_file_calibration,
+                                    calibration_features,
+                                ).detach()
+                                if calibrated_uncertainty.numel() > 0:
+                                    diagnostics["reappeared_active_file_calibration_uncertainty_mean"] = (
+                                        calibrated_uncertainty.mean()
+                                    )
                             file_slot_valid = (
                                 memory_read.position_valid[reappeared_active]
                                 & memory_read.hit[reappeared_active]
@@ -4148,6 +4429,7 @@ class Self(nn.Module):
                                             else None
                                         ),
                                         reference_valid=ballistic_valid if ballistic_valid is not None else None,
+                                        calibrated_uncertainty=calibrated_uncertainty,
                                     ),
                                 ))
                                 diagnostics.update(_prefix_metrics(
@@ -4829,6 +5111,7 @@ class Self(nn.Module):
             + self.cfg.active_file_query_weight * losses["active_file_query"]
             + self.cfg.active_file_expectation_weight * losses["active_file_expectation"]
             + self.cfg.active_file_dynamics_weight * losses["active_file_dynamics"]
+            + self.cfg.active_file_calibration_weight * losses["active_file_calibration"]
             + self.cfg.learned_active_file_gate_weight * losses["learned_active_file_gate"]
         )
         self.memory.write(sae.eps, sae.coherence)

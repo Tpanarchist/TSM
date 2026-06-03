@@ -59,6 +59,8 @@ class TsmConfig:
     active_file_dynamics_weight: float = 0.0
     active_file_dynamics_detach_inputs: bool = True
     active_file_dynamics_delta_scale: float = 0.5
+    active_file_calibration_weight: float = 0.0
+    active_file_calibration_detach_inputs: bool = True
     active_file_candidate_radius: float = 10.0
     active_file_candidate_max_age: float = 8.0
     active_file_candidate_wrap: bool = False

@@ -1042,3 +1042,52 @@ Current fork:
 - Do not implement Stage 2 runtime decline from this confidence score.
 - Do not implement Definition splitting yet.
 - The next useful patch should create a better internal uncertainty source for the trajectory endpoint itself, such as a learned variance/error head, ensemble/dropout disagreement, or per-slot trajectory residual calibration, then rerun Probe A-prime before using neutral as a policy.
+
+## Probe A-prime Stage 1b: Learned Calibration Head
+
+Diagnostic/configs added:
+
+- `active_file_calibration` loss.
+- `active_file_calibration_weight`.
+- `active_file_calibration_detach_inputs`.
+- `reappeared_dynamics_runtime_confidence_calibrated_*` metrics.
+- `configs/temporal_objects_calibration_curved*.yaml`.
+
+The calibration head is a separate runtime judgment head over the trajectory measurement. It receives detached runtime-only features by default:
+
+- object-file trajectory/dynamics features.
+- predicted reappearance endpoint.
+- slot candidate geometry.
+- slot salience/entropy.
+- object load.
+- learned-vs-ballistic endpoint disagreement.
+
+It is trained against normalized actual endpoint error as supervision. The actual endpoint error is not used as a runtime input. Leakage audits for the confidence path remain `0.000`.
+
+Runs:
+
+- `runs/20260602_195742_temporal_objects_calibration_curved`
+- `runs/20260602_195831_temporal_objects_calibration_curved_3`
+- `runs/20260602_195635_temporal_objects_calibration_curved_4`
+- `runs/20260602_195929_temporal_objects_calibration_curved_4_wide`
+
+Held-out/test summary:
+
+| condition | set bind | runtime Pearson | naive Pearson | calibrated Pearson | calibrated Spearman | calibrated confidence mean | calibrated confidence drop on correct declines | calibrated high-error lift |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2-object curved | 1.000 | 0.933 | 0.947 | 0.874 | 0.845 | 0.821 | n/a | 0.015 |
+| 3-object curved | 1.000 | 0.802 | 0.911 | 0.721 | 0.778 | 0.862 | 0.008 | 0.009 |
+| 4-object curved | 0.250 | 0.118 | 0.166 | 0.338 | 0.477 | 0.831 | 0.004 | 0.003 |
+| 4-object wide | 0.333 | 0.105 | 0.164 | 0.252 | 0.305 | 0.815 | 0.004 | 0.003 |
+
+Interpretation:
+
+This is a partial result, not a runtime-neutral win. The learned calibration head does recover some signal at the four-object wall: Pearson improves from about `0.118` to `0.338` on 4-object curved and from about `0.105` to `0.252` on wide-4. That means a separate judgment head is more informative than the prior handcrafted runtime confidence under load.
+
+But the head is not yet calibrated enough to license Stage 2. Confidence stays high at the wall, the confidence drop on Probe-A correct-decline cases is only about `0.004`, and calibrated uncertainty barely separates high-error from low-error cases. The head can weakly rank failure, but it does not yet "feel maybe" strongly enough to drive a decline-to-bind policy.
+
+Current fork:
+
+- Do not implement runtime decline-to-bind from this head yet.
+- Do not implement Definition splitting yet.
+- The next calibration patch should make uncertainty sharper, not broader: train a residual/variance target with stronger high-error weighting, a pairwise ranking loss over endpoint errors, or an ensemble/dropout disagreement diagnostic. The success condition is not just correlation; it is visible confidence drop and positive high-error lift at 4/wide-4.
