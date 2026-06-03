@@ -5,18 +5,33 @@ import numpy as np
 from refactor_rnd.context_recursion import (
     Abstraction,
     AbstainGatedAbstractor,
+    apply_stress_case,
     Context,
     Trit,
     TritVote,
+    available_stress_case_names,
+    available_stress_encoder_names,
     build_context,
+    canonical_encoder_name,
+    cooccurrence_encoder,
     context_relation_space_encoder,
+    encode_sequences,
     depth_probe_metrics,
+    degraded_transition_lag_order_encoder,
     histogram_encoder,
+    level_collapse_diagnostics,
     novelty_stream_metrics,
+    probe_d_stress_bench,
+    probe_e_damage_decomposition,
+    probe_f_order_loss_split,
     run_all,
+    run_classify_before_recursion_ablation,
+    run_depth_encoder_diagnostics,
     run_probe,
     same_marginal_order_sequences,
     shared_anchor_sequences,
+    stress_degradation_levels,
+    transition_lag_order_encoder,
 )
 
 
@@ -35,7 +50,10 @@ def test_context_relation_space_changes_when_marginals_match():
     right = [0, 2, 0, 2, 1, 1]
 
     assert np.allclose(histogram_encoder(left, 3), histogram_encoder(right, 3))
+    assert np.allclose(cooccurrence_encoder(left, 3), cooccurrence_encoder(right, 3))
     assert not np.allclose(context_relation_space_encoder(left, 3), context_relation_space_encoder(right, 3))
+    assert not np.allclose(transition_lag_order_encoder(left, 3), transition_lag_order_encoder(right, 3))
+    assert not np.allclose(degraded_transition_lag_order_encoder(left, 3, 0.75), degraded_transition_lag_order_encoder(right, 3, 0.75))
 
 
 def test_build_context_preserves_directed_relations():
@@ -82,9 +100,11 @@ def test_depth_probe_reports_levels_without_pass_claim():
 
     assert set(metrics) == {"level1", "level2", "level3"}
     for level in metrics.values():
-        assert set(level) == {"nmi", "accuracy", "abstraction_count", "abstain_rate"}
-        assert 0.0 <= level["nmi"] <= 1.0
-        assert 0.0 <= level["accuracy"] <= 1.0
+        assert {"nmi", "accuracy", "abstraction_nmi", "abstraction_ari", "supervised_probe_accuracy", "supervised_probe_nmi", "abstraction_count", "abstain_rate"}.issubset(level)
+        assert 0.0 <= level["abstraction_nmi"] <= 1.0
+        assert -1.0 <= level["abstraction_ari"] <= 1.0
+        assert 0.0 <= level["supervised_probe_accuracy"] <= 1.0
+        assert 0.0 <= level["supervised_probe_nmi"] <= 1.0
         assert level["abstraction_count"] >= 1
 
 
@@ -107,3 +127,252 @@ def test_run_all_reports_acceptance():
     assert metrics["same_marginal"]["acceptance_pass"]
     assert metrics["shared_anchor"]["acceptance_pass"]
     assert metrics["novelty"]["novelty_spike_1"] > 0.0
+    assert "collapse_diagnostics" in metrics
+
+
+def test_transition_encoder_level3_drops_signal_but_order_encoder_recovers_it():
+    transition = run_depth_encoder_diagnostics("transition")
+    ordered = run_depth_encoder_diagnostics("transition_lag_order")
+
+    assert transition["level3"]["supervised_probe_accuracy"] <= 0.60
+    assert transition["level3"]["abstraction_nmi"] <= 0.25
+    assert ordered["level3"]["supervised_probe_accuracy"] >= transition["level3"]["supervised_probe_accuracy"]
+
+
+def test_classify_before_recursion_ablation_reports_modes():
+    classified = run_classify_before_recursion_ablation("classified_abstraction")
+    raw_context = run_classify_before_recursion_ablation("raw_context")
+
+    assert set(classified) == {"level1", "level2", "level3"}
+    assert set(raw_context) == {"level1", "level2", "level3"}
+    assert classified["level3"]["abstraction_count"] >= 1
+    assert raw_context["level3"]["abstraction_count"] >= 1
+
+
+def test_level_collapse_diagnostics_reports_tables_and_diagnosis():
+    diagnostics = level_collapse_diagnostics()
+
+    assert set(diagnostics["encoder_results"]) == {"histogram", "cooccurrence", "transition", "transition_lag_order"}
+    assert diagnostics["diagnosis"]["primary_cause"] in {"classifier_weakness", "information_loss", "true_recursion_depth_failure", "mixed"}
+    assert diagnostics["diagnosis"]["recursion_takeaway"] in {
+        "classification_before_recursion_helps",
+        "raw_context_recursion_helps",
+        "no_clear_recursion_mode_winner",
+    }
+    assert canonical_encoder_name("context_relation_space") == "transition"
+
+
+def test_variable_lag_inserts_delay_steps_literally():
+    stressed = apply_stress_case([0, 1, 2, 3], "variable_lag", degradation=0.50, label=0, sample_index=0, vocab_size=4)
+
+    assert stressed == [0, 0, 1, 2, 3]
+
+
+def test_missing_events_removes_steps_literally():
+    stressed = apply_stress_case([0, 1, 2, 3, 4, 5], "missing_events", degradation=0.75, label=0, sample_index=0, vocab_size=6)
+
+    assert stressed == [1, 3, 5]
+    assert -1 not in stressed
+
+
+def test_probe_d_stress_bench_reports_cases_and_thresholds():
+    stress = probe_d_stress_bench()
+
+    assert set(stress["results"]) == set(available_stress_case_names())
+    assert stress["diagnosis"]["transition_lag_order_beats_transition_case_count"] >= 1
+    assert stress["diagnosis"]["degraded_transition_lag_order_weaker_case_count"] >= 1
+    assert stress["diagnosis"]["degraded_transition_lag_order_weaker_cases"]
+    assert len(stress["diagnosis"]["level3_damage_ranking"]) == len(available_stress_case_names())
+    for stress_case in available_stress_case_names():
+        assert set(stress["results"][stress_case]) == set(available_stress_encoder_names())
+    assert len(stress["table"]) == (
+        len(available_stress_case_names())
+        * len(available_stress_encoder_names())
+        * len(stress_degradation_levels())
+    )
+
+
+def test_probe_e_damage_decomposition_reports_case_scores():
+    decomposition = probe_e_damage_decomposition()
+
+    assert set(decomposition["results"]) == set(available_stress_case_names())
+    assert len(decomposition["table"]) == len(available_stress_case_names())
+    assert decomposition["diagnosis"]["most_total_damage_case"] in set(available_stress_case_names())
+    assert decomposition["diagnosis"]["most_order_loss_case"] in set(available_stress_case_names())
+    assert decomposition["diagnosis"]["most_semantic_confusion_case"] in set(available_stress_case_names())
+
+
+def test_probe_e_table_matches_mean_degradation_rows():
+    decomposition = probe_e_damage_decomposition()
+    table_by_case = {row["stress_case"]: row for row in decomposition["table"]}
+
+    for stress_case, rows in decomposition["results"].items():
+        expected_semantic = float(np.mean([row["semantic_confusion_score"] for row in rows.values()]))
+        expected_order = float(np.mean([row["order_loss_score"] for row in rows.values()]))
+        expected_total = float(np.mean([row["total_damage_score"] for row in rows.values()]))
+        expected_probe = float(np.mean([row["supervised_probe_accuracy"] for row in rows.values()]))
+        expected_nmi = float(np.mean([row["abstraction_nmi"] for row in rows.values()]))
+        expected_order_recovery = float(np.mean([row["order_recovery_accuracy"] for row in rows.values()]))
+        row = table_by_case[stress_case]
+
+        assert np.isclose(row["semantic_confusion_score"], expected_semantic)
+        assert np.isclose(row["order_loss_score"], expected_order)
+        assert np.isclose(row["total_damage_score"], expected_total)
+        assert np.isclose(row["supervised_probe_accuracy"], expected_probe)
+        assert np.isclose(row["abstraction_nmi"], expected_nmi)
+        assert np.isclose(row["order_recovery_accuracy"], expected_order_recovery)
+        assert row["failure_mode"] in {
+            "context_ordering_problem",
+            "abstraction_classification_problem",
+            "context_to_abstraction_bridge_failure",
+            "mixed_low_damage",
+            "low_damage",
+        }
+
+
+def test_probe_f_order_loss_split_reports_case_scores():
+    decomposition = probe_f_order_loss_split()
+
+    assert set(decomposition["results"]) == set(available_stress_case_names())
+    assert len(decomposition["table"]) == len(available_stress_case_names())
+    assert decomposition["diagnosis"]["most_total_order_loss_case"] in set(available_stress_case_names())
+    assert decomposition["diagnosis"]["most_phase_error_case"] in set(available_stress_case_names()) | {"none"}
+    assert decomposition["diagnosis"]["most_rank_instability_case"] in set(available_stress_case_names()) | {"none"}
+
+
+def test_probe_f_table_matches_mean_degradation_rows_and_ranking():
+    decomposition = probe_f_order_loss_split()
+    table_by_case = {row["stress_case"]: row for row in decomposition["table"]}
+
+    for stress_case, rows in decomposition["results"].items():
+        expected_phase = float(np.mean([row["phase_error_score"] for row in rows.values()]))
+        expected_rank = float(np.mean([row["rank_instability_score"] for row in rows.values()]))
+        expected_total = float(np.mean([row["total_order_loss_score"] for row in rows.values()]))
+        expected_strict = float(np.mean([row["strict_order_alignment_error"] for row in rows.values()]))
+        expected_phase_tolerant = float(np.mean([row["phase_tolerant_order_alignment_error"] for row in rows.values()]))
+        row = table_by_case[stress_case]
+
+        assert np.isclose(row["phase_error_score"], expected_phase)
+        assert np.isclose(row["rank_instability_score"], expected_rank)
+        assert np.isclose(row["total_order_loss_score"], expected_total)
+        assert np.isclose(row["strict_order_alignment_error"], expected_strict)
+        assert np.isclose(row["phase_tolerant_order_alignment_error"], expected_phase_tolerant)
+        assert row["order_failure_mode"] in {
+            "phase_error_problem",
+            "rank_instability_problem",
+            "mixed_order_damage",
+            "mixed_low_order_damage",
+            "low_order_damage",
+        }
+
+    expected_order = [
+        row["stress_case"]
+        for row in sorted(
+            decomposition["table"],
+            key=lambda row: (
+                -row["total_order_loss_score"],
+                -row["rank_instability_score"],
+                -row["phase_error_score"],
+                row["stress_case"],
+            ),
+        )
+    ]
+    actual_order = [row["stress_case"] for row in decomposition["table"]]
+    assert actual_order == expected_order
+    assert decomposition["diagnosis"]["most_total_order_loss_case"] == expected_order[0]
+    if np.isclose(max(row["phase_error_score"] for row in decomposition["table"]), 0.0):
+        assert decomposition["diagnosis"]["most_phase_error_case"] == "none"
+
+
+def test_probe_d_damage_ranking_matches_level3_deltas():
+    stress = probe_d_stress_bench()
+    weaker_cases: set[str] = set()
+    expected_ranking: dict[str, dict[str, float]] = {}
+    for stress_case, encoder_results in stress["results"].items():
+        case_scores: list[float] = []
+        case_nmi_damage: list[float] = []
+        case_probe_damage: list[float] = []
+        for degradation_key, full_payload in encoder_results["transition_lag_order"].items():
+            if float(degradation_key) <= 0.0:
+                continue
+            degraded_payload = encoder_results["degraded_transition_lag_order"][degradation_key]
+            full_level3 = full_payload["levels"]["level3"]
+            degraded_level3 = degraded_payload["levels"]["level3"]
+            nmi_damage = max(0.0, full_level3["abstraction_nmi"] - degraded_level3["abstraction_nmi"])
+            probe_damage = max(0.0, full_level3["supervised_probe_accuracy"] - degraded_level3["supervised_probe_accuracy"])
+            case_nmi_damage.append(nmi_damage)
+            case_probe_damage.append(probe_damage)
+            case_scores.append(nmi_damage + probe_damage)
+            if (
+                nmi_damage > 0.0
+                or probe_damage > 0.0
+            ):
+                weaker_cases.add(stress_case)
+        expected_ranking[stress_case] = {
+            "level3_damage_score": float(np.mean(case_scores)),
+            "level3_nmi_damage": float(np.mean(case_nmi_damage)),
+            "level3_probe_damage": float(np.mean(case_probe_damage)),
+        }
+
+    expected_order = [
+        name
+        for name, _ in sorted(
+            expected_ranking.items(),
+            key=lambda item: (
+                -item[1]["level3_damage_score"],
+                -item[1]["level3_nmi_damage"],
+                -item[1]["level3_probe_damage"],
+                item[0],
+            ),
+        )
+    ]
+    actual_ranking = stress["diagnosis"]["level3_damage_ranking"]
+
+    assert stress["diagnosis"]["degraded_transition_lag_order_weaker_case_count"] == len(weaker_cases)
+    assert set(stress["diagnosis"]["degraded_transition_lag_order_weaker_cases"]) == weaker_cases
+    assert stress["diagnosis"]["degraded_transition_lag_order_weaker_case_count"] >= 1
+    assert [row["stress_case"] for row in actual_ranking] == expected_order
+    assert stress["diagnosis"]["most_damaging_case"] == expected_order[0]
+    assert stress["diagnosis"]["least_damaging_case"] == expected_order[-1]
+    for row in actual_ranking:
+        expected = expected_ranking[row["stress_case"]]
+        assert np.isclose(row["level3_damage_score"], expected["level3_damage_score"])
+        assert np.isclose(row["level3_nmi_damage"], expected["level3_nmi_damage"])
+        assert np.isclose(row["level3_probe_damage"], expected["level3_probe_damage"])
+
+
+def test_order_aware_encoder_handles_variable_length_stress_batches():
+    features = encode_sequences(
+        [[0, 1, 2, 3], [0, 1, 1, 2, 3], [0, 2, 3]],
+        vocab_size=4,
+        encoder="transition_lag_order",
+    )
+
+    assert features.shape == (3, (2 + 5) * 16)
+
+
+def test_transition_lag_order_survives_ambiguous_shared_anchors_better_than_transition():
+    transition = run_depth_encoder_diagnostics("transition", stress_case="ambiguous_shared_anchors", degradation=0.50)
+    ordered = run_depth_encoder_diagnostics("transition_lag_order", stress_case="ambiguous_shared_anchors", degradation=0.50)
+
+    assert ordered["level3"]["supervised_probe_accuracy"] >= transition["level3"]["supervised_probe_accuracy"]
+
+
+def test_degraded_transition_lag_order_reports_milder_level3_signal_than_full_encoder():
+    full = run_depth_encoder_diagnostics("transition_lag_order", stress_case="repeated_symbols", degradation=0.75)
+    degraded = run_depth_encoder_diagnostics(
+        "degraded_transition_lag_order",
+        stress_case="repeated_symbols",
+        degradation=0.75,
+        degradation_loss=0.75,
+    )
+
+    assert degraded["level3"]["supervised_probe_accuracy"] <= full["level3"]["supervised_probe_accuracy"]
+
+
+def test_run_all_reports_probe_d_stress():
+    metrics = run_all(seed=31)
+
+    assert "probe_d_stress" in metrics
+    assert "probe_e_decomposition" in metrics
+    assert "probe_f_order_loss_split" in metrics
