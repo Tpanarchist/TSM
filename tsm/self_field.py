@@ -1558,12 +1558,18 @@ def _all_track_runtime_confidence_metrics(
         "decision_coverage_fraction": zero,
         "actual_endpoint_error_mean": zero,
         "actual_endpoint_error_p90": zero,
+        "endpoint_error_to_spacing_ratio_mean": zero,
+        "endpoint_error_to_spacing_ratio_p90": zero,
+        "unsafe_endpoint_error_ratio_threshold": zero,
+        "unsafe_endpoint_error_fraction": zero,
         "runtime_uncertainty_mean": zero,
         "runtime_confidence_mean": zero,
         "calibrated_uncertainty_mean": zero,
         "calibrated_confidence_mean": zero,
         "naive_margin_uncertainty_mean": zero,
         "naive_margin_confidence_mean": zero,
+        "candidate_margin_uncertainty_mean": zero,
+        "candidate_margin_confidence_mean": zero,
         "nearest_distance_mean": zero,
         "reference_disagreement_mean": zero,
         "runtime_uncertainty_error_pearson": zero,
@@ -1572,6 +1578,16 @@ def _all_track_runtime_confidence_metrics(
         "calibrated_uncertainty_error_spearman": zero,
         "naive_margin_uncertainty_error_pearson": zero,
         "naive_margin_uncertainty_error_spearman": zero,
+        "candidate_margin_uncertainty_error_pearson": zero,
+        "candidate_margin_uncertainty_error_spearman": zero,
+        "runtime_uncertainty_unsafe_auroc": zero,
+        "runtime_uncertainty_unsafe_auprc": zero,
+        "calibrated_uncertainty_unsafe_auroc": zero,
+        "calibrated_uncertainty_unsafe_auprc": zero,
+        "naive_margin_uncertainty_unsafe_auroc": zero,
+        "naive_margin_uncertainty_unsafe_auprc": zero,
+        "candidate_margin_uncertainty_unsafe_auroc": zero,
+        "candidate_margin_uncertainty_unsafe_auprc": zero,
         "nearest_distance_error_pearson": zero,
         "nearest_distance_error_spearman": zero,
         "reference_disagreement_error_pearson": zero,
@@ -1609,6 +1625,33 @@ def _all_track_runtime_confidence_metrics(
         "naive_margin_uncertainty_high_error_mean": zero,
         "naive_margin_uncertainty_low_error_mean": zero,
         "naive_margin_uncertainty_high_error_lift": zero,
+        "candidate_margin_uncertainty_high_error_mean": zero,
+        "candidate_margin_uncertainty_low_error_mean": zero,
+        "candidate_margin_uncertainty_high_error_lift": zero,
+        "runtime_uncertainty_unsafe_mean": zero,
+        "runtime_uncertainty_safe_mean": zero,
+        "runtime_uncertainty_unsafe_lift": zero,
+        "calibrated_uncertainty_unsafe_mean": zero,
+        "calibrated_uncertainty_safe_mean": zero,
+        "calibrated_uncertainty_unsafe_lift": zero,
+        "naive_margin_uncertainty_unsafe_mean": zero,
+        "naive_margin_uncertainty_safe_mean": zero,
+        "naive_margin_uncertainty_unsafe_lift": zero,
+        "candidate_margin_uncertainty_unsafe_mean": zero,
+        "candidate_margin_uncertainty_safe_mean": zero,
+        "candidate_margin_uncertainty_unsafe_lift": zero,
+        "runtime_uncertainty_error_low_bucket_mean": zero,
+        "runtime_uncertainty_error_mid_bucket_mean": zero,
+        "runtime_uncertainty_error_high_bucket_mean": zero,
+        "calibrated_uncertainty_error_low_bucket_mean": zero,
+        "calibrated_uncertainty_error_mid_bucket_mean": zero,
+        "calibrated_uncertainty_error_high_bucket_mean": zero,
+        "naive_margin_uncertainty_error_low_bucket_mean": zero,
+        "naive_margin_uncertainty_error_mid_bucket_mean": zero,
+        "naive_margin_uncertainty_error_high_bucket_mean": zero,
+        "candidate_margin_uncertainty_error_low_bucket_mean": zero,
+        "candidate_margin_uncertainty_error_mid_bucket_mean": zero,
+        "candidate_margin_uncertainty_error_high_bucket_mean": zero,
         "confidence_true_position_usage": zero,
         "confidence_endpoint_error_usage": zero,
         "confidence_object_id_usage": zero,
@@ -1668,13 +1711,17 @@ def _all_track_runtime_confidence_metrics(
 
     scale = float(max(1, cfg.image_size))
     age_scale = float(max(1.0, cfg.active_file_candidate_max_age))
+    unsafe_ratio_threshold = torch.tensor(0.5, dtype=dtype, device=device)
     actual_errors: list[torch.Tensor] = []
+    endpoint_error_ratios: list[torch.Tensor] = []
     runtime_uncertainties: list[torch.Tensor] = []
     runtime_confidences: list[torch.Tensor] = []
     calibrated_uncertainties: list[torch.Tensor] = []
     calibrated_confidences: list[torch.Tensor] = []
     naive_uncertainties: list[torch.Tensor] = []
     naive_confidences: list[torch.Tensor] = []
+    candidate_margin_uncertainties: list[torch.Tensor] = []
+    candidate_margin_confidences: list[torch.Tensor] = []
     nearest_distances: list[torch.Tensor] = []
     reference_disagreements: list[torch.Tensor] = []
     slot_confidences: list[torch.Tensor] = []
@@ -1690,6 +1737,16 @@ def _all_track_runtime_confidence_metrics(
         if valid_slots.numel() < max(2, object_count):
             continue
         true_positions = all_positions[row, :object_count]
+        if object_count > 1:
+            true_position_distances = torch.cdist(true_positions, true_positions) / scale
+            true_position_distances = true_position_distances + torch.eye(
+                object_count,
+                dtype=dtype,
+                device=device,
+            ) * 1e6
+            row_min_spacing = true_position_distances.min().clamp_min(1e-6)
+        else:
+            row_min_spacing = torch.tensor(float("inf"), dtype=dtype, device=device)
         true_distances = torch.cdist(true_positions, slot_positions[row, valid_slots]) / scale
 
         best_true_error = torch.tensor(float("inf"), dtype=dtype, device=device)
@@ -1733,6 +1790,8 @@ def _all_track_runtime_confidence_metrics(
             relative_margin = (margin / second_distance.clamp_min(1e-6)).clamp(0.0, 1.0)
             naive_uncertainty = (1.0 - relative_margin).clamp(0.0, 1.0)
             naive_confidence = relative_margin
+            candidate_margin_uncertainty = (1.0 - margin.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+            candidate_margin_confidence = (1.0 - candidate_margin_uncertainty).clamp(0.0, 1.0)
             nearest_slot_confidence = slot_occupancy[row, nearest_slot].clamp(0.0, 1.0)
             current_file_confidence = file_confidence[file_idx].clamp(0.0, 1.0)
             age_norm = (torch.log1p(file_age[file_idx].clamp_min(0.0)) / age_scale).clamp(0.0, 1.0)
@@ -1766,16 +1825,24 @@ def _all_track_runtime_confidence_metrics(
             if true_slot is None:
                 continue
             actual_error = (predicted_positions[file_idx] - true_positions[object_idx]).norm() / scale
+            endpoint_error_ratio = torch.where(
+                torch.isfinite(row_min_spacing),
+                actual_error / row_min_spacing.clamp_min(1e-6),
+                zero,
+            )
             should_decline = margin <= actual_error
             is_correct = nearest_slot == true_slot
 
             actual_errors.append(actual_error)
+            endpoint_error_ratios.append(endpoint_error_ratio)
             runtime_uncertainties.append(runtime_uncertainty)
             runtime_confidences.append(runtime_confidence)
             calibrated_uncertainties.append(current_calibrated_uncertainty)
             calibrated_confidences.append(current_calibrated_confidence)
             naive_uncertainties.append(naive_uncertainty)
             naive_confidences.append(naive_confidence)
+            candidate_margin_uncertainties.append(candidate_margin_uncertainty)
+            candidate_margin_confidences.append(candidate_margin_confidence)
             nearest_distances.append(nearest_distance)
             reference_disagreements.append(reference_disagreement)
             slot_confidences.append(nearest_slot_confidence)
@@ -1789,15 +1856,19 @@ def _all_track_runtime_confidence_metrics(
     if not actual_errors:
         out = dict(empty)
         out["object_count"] = torch.tensor(float(object_count), dtype=dtype, device=device)
+        out["unsafe_endpoint_error_ratio_threshold"] = unsafe_ratio_threshold
         return out
 
     error_tensor = torch.stack(actual_errors)
+    endpoint_ratio_tensor = torch.stack(endpoint_error_ratios)
     uncertainty_tensor = torch.stack(runtime_uncertainties)
     confidence_tensor = torch.stack(runtime_confidences)
     calibrated_uncertainty_tensor = torch.stack(calibrated_uncertainties)
     calibrated_confidence_tensor = torch.stack(calibrated_confidences)
     naive_uncertainty_tensor = torch.stack(naive_uncertainties)
     naive_confidence_tensor = torch.stack(naive_confidences)
+    candidate_margin_uncertainty_tensor = torch.stack(candidate_margin_uncertainties)
+    candidate_margin_confidence_tensor = torch.stack(candidate_margin_confidences)
     nearest_tensor = torch.stack(nearest_distances)
     reference_tensor = torch.stack(reference_disagreements)
     slot_confidence_tensor = torch.stack(slot_confidences)
@@ -1822,23 +1893,46 @@ def _all_track_runtime_confidence_metrics(
     high_error_threshold = _quantile_or_zero(error_tensor, 0.75, zero)
     high_error_mask = error_tensor >= high_error_threshold
     low_error_mask = ~high_error_mask
+    low_bucket_threshold = _quantile_or_zero(error_tensor, 1.0 / 3.0, zero)
+    high_bucket_threshold = _quantile_or_zero(error_tensor, 2.0 / 3.0, zero)
+    low_bucket_mask = error_tensor <= low_bucket_threshold
+    high_bucket_mask = error_tensor >= high_bucket_threshold
+    mid_bucket_mask = ~(low_bucket_mask | high_bucket_mask)
+    unsafe_mask = endpoint_ratio_tensor >= unsafe_ratio_threshold
+    safe_mask = ~unsafe_mask
     runtime_high = _masked_mean(uncertainty_tensor, high_error_mask, dtype)
     runtime_low = _masked_mean(uncertainty_tensor, low_error_mask, dtype)
     calibrated_high = _masked_mean(calibrated_uncertainty_tensor, high_error_mask, dtype)
     calibrated_low = _masked_mean(calibrated_uncertainty_tensor, low_error_mask, dtype)
     naive_high = _masked_mean(naive_uncertainty_tensor, high_error_mask, dtype)
     naive_low = _masked_mean(naive_uncertainty_tensor, low_error_mask, dtype)
+    candidate_margin_high = _masked_mean(candidate_margin_uncertainty_tensor, high_error_mask, dtype)
+    candidate_margin_low = _masked_mean(candidate_margin_uncertainty_tensor, low_error_mask, dtype)
+    runtime_unsafe = _masked_mean(uncertainty_tensor, unsafe_mask, dtype)
+    runtime_safe = _masked_mean(uncertainty_tensor, safe_mask, dtype)
+    calibrated_unsafe = _masked_mean(calibrated_uncertainty_tensor, unsafe_mask, dtype)
+    calibrated_safe = _masked_mean(calibrated_uncertainty_tensor, safe_mask, dtype)
+    naive_unsafe = _masked_mean(naive_uncertainty_tensor, unsafe_mask, dtype)
+    naive_safe = _masked_mean(naive_uncertainty_tensor, safe_mask, dtype)
+    candidate_margin_unsafe = _masked_mean(candidate_margin_uncertainty_tensor, unsafe_mask, dtype)
+    candidate_margin_safe = _masked_mean(candidate_margin_uncertainty_tensor, safe_mask, dtype)
     return {
         "object_count": torch.tensor(float(object_count), dtype=dtype, device=device),
         "decision_coverage_fraction": torch.tensor(float(error_tensor.numel()) / expected_decisions, dtype=dtype, device=device),
         "actual_endpoint_error_mean": error_tensor.mean(),
         "actual_endpoint_error_p90": _quantile_or_zero(error_tensor, 0.90, zero),
+        "endpoint_error_to_spacing_ratio_mean": endpoint_ratio_tensor.mean(),
+        "endpoint_error_to_spacing_ratio_p90": _quantile_or_zero(endpoint_ratio_tensor, 0.90, zero),
+        "unsafe_endpoint_error_ratio_threshold": unsafe_ratio_threshold,
+        "unsafe_endpoint_error_fraction": unsafe_mask.to(dtype).mean(),
         "runtime_uncertainty_mean": uncertainty_tensor.mean(),
         "runtime_confidence_mean": confidence_tensor.mean(),
         "calibrated_uncertainty_mean": calibrated_uncertainty_tensor.mean(),
         "calibrated_confidence_mean": calibrated_confidence_tensor.mean(),
         "naive_margin_uncertainty_mean": naive_uncertainty_tensor.mean(),
         "naive_margin_confidence_mean": naive_confidence_tensor.mean(),
+        "candidate_margin_uncertainty_mean": candidate_margin_uncertainty_tensor.mean(),
+        "candidate_margin_confidence_mean": candidate_margin_confidence_tensor.mean(),
         "nearest_distance_mean": nearest_tensor.mean(),
         "reference_disagreement_mean": reference_tensor.mean(),
         "runtime_uncertainty_error_pearson": _pearson_or_zero(uncertainty_tensor, error_tensor, zero),
@@ -1847,6 +1941,48 @@ def _all_track_runtime_confidence_metrics(
         "calibrated_uncertainty_error_spearman": _spearman_or_zero(calibrated_uncertainty_tensor, error_tensor, zero),
         "naive_margin_uncertainty_error_pearson": _pearson_or_zero(naive_uncertainty_tensor, error_tensor, zero),
         "naive_margin_uncertainty_error_spearman": _spearman_or_zero(naive_uncertainty_tensor, error_tensor, zero),
+        "candidate_margin_uncertainty_error_pearson": _pearson_or_zero(
+            candidate_margin_uncertainty_tensor,
+            error_tensor,
+            zero,
+        ),
+        "candidate_margin_uncertainty_error_spearman": _spearman_or_zero(
+            candidate_margin_uncertainty_tensor,
+            error_tensor,
+            zero,
+        ),
+        "runtime_uncertainty_unsafe_auroc": _binary_auroc_or_zero(uncertainty_tensor, unsafe_mask, zero),
+        "runtime_uncertainty_unsafe_auprc": _binary_auprc_or_zero(uncertainty_tensor, unsafe_mask, zero),
+        "calibrated_uncertainty_unsafe_auroc": _binary_auroc_or_zero(
+            calibrated_uncertainty_tensor,
+            unsafe_mask,
+            zero,
+        ),
+        "calibrated_uncertainty_unsafe_auprc": _binary_auprc_or_zero(
+            calibrated_uncertainty_tensor,
+            unsafe_mask,
+            zero,
+        ),
+        "naive_margin_uncertainty_unsafe_auroc": _binary_auroc_or_zero(
+            naive_uncertainty_tensor,
+            unsafe_mask,
+            zero,
+        ),
+        "naive_margin_uncertainty_unsafe_auprc": _binary_auprc_or_zero(
+            naive_uncertainty_tensor,
+            unsafe_mask,
+            zero,
+        ),
+        "candidate_margin_uncertainty_unsafe_auroc": _binary_auroc_or_zero(
+            candidate_margin_uncertainty_tensor,
+            unsafe_mask,
+            zero,
+        ),
+        "candidate_margin_uncertainty_unsafe_auprc": _binary_auprc_or_zero(
+            candidate_margin_uncertainty_tensor,
+            unsafe_mask,
+            zero,
+        ),
         "nearest_distance_error_pearson": _pearson_or_zero(nearest_tensor, error_tensor, zero),
         "nearest_distance_error_spearman": _spearman_or_zero(nearest_tensor, error_tensor, zero),
         "reference_disagreement_error_pearson": _pearson_or_zero(reference_tensor, error_tensor, zero),
@@ -1886,6 +2022,69 @@ def _all_track_runtime_confidence_metrics(
         "naive_margin_uncertainty_high_error_mean": naive_high,
         "naive_margin_uncertainty_low_error_mean": naive_low,
         "naive_margin_uncertainty_high_error_lift": naive_high - naive_low,
+        "candidate_margin_uncertainty_high_error_mean": candidate_margin_high,
+        "candidate_margin_uncertainty_low_error_mean": candidate_margin_low,
+        "candidate_margin_uncertainty_high_error_lift": candidate_margin_high - candidate_margin_low,
+        "runtime_uncertainty_unsafe_mean": runtime_unsafe,
+        "runtime_uncertainty_safe_mean": runtime_safe,
+        "runtime_uncertainty_unsafe_lift": runtime_unsafe - runtime_safe,
+        "calibrated_uncertainty_unsafe_mean": calibrated_unsafe,
+        "calibrated_uncertainty_safe_mean": calibrated_safe,
+        "calibrated_uncertainty_unsafe_lift": calibrated_unsafe - calibrated_safe,
+        "naive_margin_uncertainty_unsafe_mean": naive_unsafe,
+        "naive_margin_uncertainty_safe_mean": naive_safe,
+        "naive_margin_uncertainty_unsafe_lift": naive_unsafe - naive_safe,
+        "candidate_margin_uncertainty_unsafe_mean": candidate_margin_unsafe,
+        "candidate_margin_uncertainty_safe_mean": candidate_margin_safe,
+        "candidate_margin_uncertainty_unsafe_lift": candidate_margin_unsafe - candidate_margin_safe,
+        "runtime_uncertainty_error_low_bucket_mean": _masked_mean(uncertainty_tensor, low_bucket_mask, dtype),
+        "runtime_uncertainty_error_mid_bucket_mean": _masked_mean(uncertainty_tensor, mid_bucket_mask, dtype),
+        "runtime_uncertainty_error_high_bucket_mean": _masked_mean(uncertainty_tensor, high_bucket_mask, dtype),
+        "calibrated_uncertainty_error_low_bucket_mean": _masked_mean(
+            calibrated_uncertainty_tensor,
+            low_bucket_mask,
+            dtype,
+        ),
+        "calibrated_uncertainty_error_mid_bucket_mean": _masked_mean(
+            calibrated_uncertainty_tensor,
+            mid_bucket_mask,
+            dtype,
+        ),
+        "calibrated_uncertainty_error_high_bucket_mean": _masked_mean(
+            calibrated_uncertainty_tensor,
+            high_bucket_mask,
+            dtype,
+        ),
+        "naive_margin_uncertainty_error_low_bucket_mean": _masked_mean(
+            naive_uncertainty_tensor,
+            low_bucket_mask,
+            dtype,
+        ),
+        "naive_margin_uncertainty_error_mid_bucket_mean": _masked_mean(
+            naive_uncertainty_tensor,
+            mid_bucket_mask,
+            dtype,
+        ),
+        "naive_margin_uncertainty_error_high_bucket_mean": _masked_mean(
+            naive_uncertainty_tensor,
+            high_bucket_mask,
+            dtype,
+        ),
+        "candidate_margin_uncertainty_error_low_bucket_mean": _masked_mean(
+            candidate_margin_uncertainty_tensor,
+            low_bucket_mask,
+            dtype,
+        ),
+        "candidate_margin_uncertainty_error_mid_bucket_mean": _masked_mean(
+            candidate_margin_uncertainty_tensor,
+            mid_bucket_mask,
+            dtype,
+        ),
+        "candidate_margin_uncertainty_error_high_bucket_mean": _masked_mean(
+            candidate_margin_uncertainty_tensor,
+            high_bucket_mask,
+            dtype,
+        ),
         "confidence_true_position_usage": zero,
         "confidence_endpoint_error_usage": zero,
         "confidence_object_id_usage": zero,
@@ -2430,6 +2629,52 @@ def _spearman_or_zero(left: torch.Tensor, right: torch.Tensor, zero: torch.Tenso
     if left.numel() < 2 or right.numel() < 2:
         return zero
     return _pearson_or_zero(_rank_1d(left), _rank_1d(right), zero)
+
+
+def _score_has_variance(scores: torch.Tensor) -> bool:
+    if scores.numel() < 2:
+        return False
+    centered = scores.reshape(-1) - scores.reshape(-1).mean()
+    return bool((centered.norm() > 1e-8).item())
+
+
+def _binary_auroc_or_zero(scores: torch.Tensor, labels: torch.Tensor, zero: torch.Tensor) -> torch.Tensor:
+    scores = scores.reshape(-1)
+    labels = labels.reshape(-1).to(device=scores.device, dtype=torch.bool)
+    count = min(scores.numel(), labels.numel())
+    if count < 2:
+        return zero
+    scores = scores[:count]
+    labels = labels[:count]
+    positives = labels.to(scores.dtype)
+    positive_count = positives.sum()
+    negative_count = torch.tensor(float(count), dtype=scores.dtype, device=scores.device) - positive_count
+    if bool((positive_count <= 0.0).item()) or bool((negative_count <= 0.0).item()) or not _score_has_variance(scores):
+        return zero
+    ranks = _rank_1d(scores) + 1.0
+    positive_rank_sum = ranks[labels].sum()
+    return (positive_rank_sum - positive_count * (positive_count + 1.0) * 0.5) / (
+        positive_count * negative_count
+    ).clamp_min(1e-6)
+
+
+def _binary_auprc_or_zero(scores: torch.Tensor, labels: torch.Tensor, zero: torch.Tensor) -> torch.Tensor:
+    scores = scores.reshape(-1)
+    labels = labels.reshape(-1).to(device=scores.device, dtype=torch.bool)
+    count = min(scores.numel(), labels.numel())
+    if count < 2:
+        return zero
+    scores = scores[:count]
+    labels = labels[:count]
+    positive_count = labels.to(scores.dtype).sum()
+    if bool((positive_count <= 0.0).item()) or not _score_has_variance(scores):
+        return zero
+    order = scores.argsort(descending=True)
+    ordered_labels = labels[order].to(scores.dtype)
+    ranks = torch.arange(1, count + 1, dtype=scores.dtype, device=scores.device)
+    true_positives = ordered_labels.cumsum(dim=0)
+    precision = true_positives / ranks
+    return (precision * ordered_labels).sum() / positive_count.clamp_min(1e-6)
 
 
 def _paired_endpoint_error_structure_metrics(
@@ -3236,10 +3481,45 @@ class Self(nn.Module):
                         endpoint_error = (
                             dynamics_position_for_error[dynamics_valid] - target_position[dynamics_valid]
                         ).norm(dim=-1) / float(max(1, self.cfg.image_size))
+                        calibration_prediction = calibration_uncertainty[dynamics_valid].clamp(1e-4, 1.0 - 1e-4)
                         active_file_calibration = F.smooth_l1_loss(
-                            calibration_uncertainty[dynamics_valid].clamp(0.0, 1.0),
+                            calibration_prediction,
                             endpoint_error.detach().clamp(0.0, 1.0),
                         )
+                        if self.cfg.active_file_calibration_tail_weight > 0.0:
+                            unsafe_target: torch.Tensor | None = None
+                            all_target_positions = batch.get("all_object_positions_tp1")
+                            if torch.is_tensor(all_target_positions):
+                                all_target_positions = all_target_positions.to(
+                                    device=image_t.device,
+                                    dtype=image_t.dtype,
+                                )[reappeared_for_alignment]
+                                if all_target_positions.dim() == 3 and all_target_positions.shape[0] >= dynamics_valid.shape[0]:
+                                    object_count = int(all_target_positions.shape[1])
+                                    if object_count > 1:
+                                        pair_distances = torch.cdist(all_target_positions, all_target_positions) / float(
+                                            max(1, self.cfg.image_size)
+                                        )
+                                        pair_distances = pair_distances + torch.eye(
+                                            object_count,
+                                            dtype=image_t.dtype,
+                                            device=image_t.device,
+                                        ).view(1, object_count, object_count) * 1e6
+                                        min_spacing = pair_distances.min(dim=-1).values.min(dim=-1).values
+                                        endpoint_ratio = endpoint_error / min_spacing[dynamics_valid].clamp_min(1e-6)
+                                        unsafe_target = (
+                                            endpoint_ratio
+                                            >= float(self.cfg.active_file_calibration_tail_ratio_threshold)
+                                        ).to(image_t.dtype)
+                            if unsafe_target is not None and unsafe_target.numel() > 0:
+                                tail_risk = F.binary_cross_entropy(
+                                    calibration_prediction,
+                                    unsafe_target.detach(),
+                                )
+                                active_file_calibration = (
+                                    active_file_calibration
+                                    + self.cfg.active_file_calibration_tail_weight * tail_risk
+                                )
                 needs_file_expectation = (
                     self.cfg.active_file_expectation_weight > 0.0
                     or self.cfg.learned_active_file_gate_expectation_features

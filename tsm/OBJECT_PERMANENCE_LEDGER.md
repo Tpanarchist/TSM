@@ -1091,3 +1091,65 @@ Current fork:
 - Do not implement runtime decline-to-bind from this head yet.
 - Do not implement Definition splitting yet.
 - The next calibration patch should make uncertainty sharper, not broader: train a residual/variance target with stronger high-error weighting, a pairwise ranking loss over endpoint errors, or an ensemble/dropout disagreement diagnostic. The success condition is not just correlation; it is visible confidence drop and positive high-error lift at 4/wide-4.
+
+## Probe A-prime Stage 1c: Tail Danger Calibration
+
+Diagnostic/code added:
+
+- `endpoint_error_to_spacing_ratio_*` runtime-confidence metrics.
+- `unsafe_endpoint_error_fraction`.
+- AUROC/AUPRC for unsafe endpoint-error cases.
+- Unsafe mean/lift metrics for runtime, calibrated, naive-margin, and absolute candidate-margin scores.
+- Error-bucket means for low/mid/high actual endpoint-error quantiles.
+- Optional `active_file_calibration_tail_weight` / `active_file_calibration_tail_ratio_threshold` objective.
+- Tail configs:
+  - `configs/temporal_objects_tail_calibration_curved_4.yaml`
+  - `configs/temporal_objects_tail_calibration_curved_4_wide.yaml`
+
+Unsafe is defined as:
+
+```text
+normalized_endpoint_error / nearest_interobject_spacing >= 0.5
+```
+
+That is the nearest-position flip-risk boundary. This is a scoring/training target only. True positions and endpoint errors are not runtime inputs to the confidence head, and confidence leakage audits remain `0.000`.
+
+Evaluation outputs:
+
+- `runs/20260602_195742_temporal_objects_calibration_curved/tail_eval_best.json`
+- `runs/20260602_195831_temporal_objects_calibration_curved_3/tail_eval_best.json`
+- `runs/20260602_195635_temporal_objects_calibration_curved_4/tail_eval_best.json`
+- `runs/20260602_195929_temporal_objects_calibration_curved_4_wide/tail_eval_best.json`
+- `runs/20260602_204436_temporal_objects_tail_calibration_curved_4/tail_eval_latest.json`
+- `runs/20260602_204529_temporal_objects_tail_calibration_curved_4_wide/tail_eval_latest.json`
+
+Baseline calibration held-out/test danger summary:
+
+| condition | unsafe frac | p90 error/spacing | runtime AUROC/AUPRC | calibrated AUROC/AUPRC | naive-margin AUROC/AUPRC | candidate-margin AUROC/AUPRC | calibrated unsafe lift |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 2-object curved | 0.250 | 0.546 | 1.000 / 1.000 | 0.923 / 0.821 | 1.000 / 1.000 | 0.923 / 0.821 | 0.0159 |
+| 3-object curved | 0.333 | 0.653 | 0.938 / 0.878 | 0.969 / 0.946 | 0.969 / 0.946 | 0.938 / 0.912 | 0.0119 |
+| 4-object curved | 0.500 | 1.134 | 0.695 / 0.789 | 0.746 / 0.768 | 0.659 / 0.763 | 0.627 / 0.750 | 0.0072 |
+| 4-object wide | 0.729 | 1.196 | 0.847 / 0.938 | 0.812 / 0.882 | 0.875 / 0.940 | 0.881 / 0.943 | 0.0111 |
+
+Tail-weighted continuation summary:
+
+| condition | checkpoint | unsafe frac | p90 error/spacing | calibrated Pearson/Spearman | calibrated AUROC/AUPRC | calibrated unsafe lift | calibrated low/mid/high bucket |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 4-object curved | baseline best | 0.500 | 1.134 | 0.338 / 0.477 | 0.746 / 0.768 | 0.0072 | 0.197 / 0.206 / 0.206 |
+| 4-object curved | tail latest | 0.375 | 1.022 | 0.500 / 0.606 | 0.835 / 0.802 | 0.0205 | 0.370 / 0.389 / 0.397 |
+| 4-object wide | baseline best | 0.729 | 1.196 | 0.252 / 0.305 | 0.812 / 0.882 | 0.0111 | 0.224 / 0.230 / 0.230 |
+| 4-object wide | tail latest | 0.583 | 1.237 | 0.381 / 0.436 | 0.786 / 0.817 | 0.0007 | 0.503 / 0.504 / 0.504 |
+
+Interpretation:
+
+This is a sharper yellow light, not a green light for runtime neutral. The baseline calibration head is better judged by unsafe ranking than by Pearson alone. On 4-object curved it beats the handcrafted runtime score on AUROC, but only weakly separates unsafe from safe cases by magnitude. On wide-4, the handcrafted and candidate-margin baselines still beat the calibrated head on danger ranking.
+
+The tail-risk objective improves the regular 4-object wall: calibrated AUROC rises from `0.746` to `0.835`, Spearman from `0.477` to `0.606`, and unsafe lift from `0.007` to `0.020`. But the wide-4 continuation is a negative control: the head becomes broadly high-risk and nearly flat across error buckets, with unsafe lift dropping to `0.001`. That means the tail objective can increase danger ranking in one wall case, but it is not a reliable runtime appraisal mechanism yet.
+
+Current fork:
+
+- Do not implement Stage 2 runtime decline-to-bind from this head.
+- Do not implement Definition splitting yet.
+- Keep the tail-risk objective as an optional diagnostic/training control, not the default claim.
+- Next useful calibration source is not a bigger decline policy. It is richer uncertainty evidence in the file state: residual history, distributional/variance dynamics, ensemble/dropout disagreement, or per-slot trajectory residual memory.

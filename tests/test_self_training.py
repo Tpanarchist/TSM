@@ -572,6 +572,37 @@ def test_all_track_runtime_confidence_reports_error_calibration_without_label_le
     assert metrics["confidence_sequence_id_usage"].item() == 0.0
 
 
+def test_all_track_runtime_confidence_reports_tail_danger_detection():
+    cfg = TsmConfig(image_size=16, object_slot_count=3)
+    metrics = _all_track_runtime_confidence_metrics(
+        predicted_positions=torch.tensor([[0.1, 0.0], [4.5, 0.0], [3.0, 0.0]]),
+        predicted_valid=torch.tensor([True, True, True]),
+        file_instance_labels=torch.tensor([10, 11, 12], dtype=torch.long),
+        slot_positions=torch.tensor([[[0.0, 0.0], [4.0, 0.0], [8.0, 0.0]]]),
+        slot_valid=torch.tensor([[True, True, True]]),
+        slot_occupancy=torch.tensor([[0.95, 0.70, 0.35]]),
+        file_confidence=torch.tensor([[1.0], [0.7], [0.2]]),
+        file_age=torch.tensor([[0.0], [2.0], [7.0]]),
+        all_positions=torch.tensor([[[0.0, 0.0], [4.0, 0.0], [8.0, 0.0]]]),
+        all_instance_labels=torch.tensor([[10, 11, 12]], dtype=torch.long),
+        cfg=cfg,
+        calibrated_uncertainty=torch.tensor([0.05, 0.25, 0.90]),
+    )
+
+    assert metrics["unsafe_endpoint_error_ratio_threshold"].item() == 0.5
+    assert torch.isclose(metrics["unsafe_endpoint_error_fraction"], torch.tensor(1.0 / 3.0))
+    assert metrics["endpoint_error_to_spacing_ratio_p90"].item() > 1.0
+    assert metrics["calibrated_uncertainty_unsafe_auroc"].item() == 1.0
+    assert metrics["calibrated_uncertainty_unsafe_auprc"].item() == 1.0
+    assert metrics["calibrated_uncertainty_unsafe_lift"].item() > 0.0
+    assert metrics["calibrated_uncertainty_error_high_bucket_mean"].item() > (
+        metrics["calibrated_uncertainty_error_low_bucket_mean"].item()
+    )
+    assert metrics["candidate_margin_uncertainty_unsafe_auroc"].item() >= 0.0
+    assert metrics["confidence_endpoint_error_usage"].item() == 0.0
+    assert metrics["confidence_object_file_id_usage"].item() == 0.0
+
+
 def test_all_track_endpoint_spacing_metrics_reports_error_budget():
     cfg = TsmConfig(image_size=16, object_slot_count=3)
     metrics = _all_track_endpoint_spacing_metrics(
@@ -902,16 +933,32 @@ def test_forward_train_reports_temporal_object_diagnostics():
         "reappeared_dynamics_runtime_confidence_decision_coverage_fraction",
         "reappeared_dynamics_runtime_confidence_actual_endpoint_error_mean",
         "reappeared_dynamics_runtime_confidence_actual_endpoint_error_p90",
+        "reappeared_dynamics_runtime_confidence_endpoint_error_to_spacing_ratio_p90",
+        "reappeared_dynamics_runtime_confidence_unsafe_endpoint_error_fraction",
         "reappeared_dynamics_runtime_confidence_runtime_uncertainty_mean",
         "reappeared_dynamics_runtime_confidence_runtime_confidence_mean",
         "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_mean",
         "reappeared_dynamics_runtime_confidence_calibrated_confidence_mean",
+        "reappeared_dynamics_runtime_confidence_candidate_margin_uncertainty_mean",
         "reappeared_dynamics_runtime_confidence_runtime_uncertainty_error_pearson",
         "reappeared_dynamics_runtime_confidence_runtime_uncertainty_error_spearman",
         "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_error_pearson",
         "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_error_spearman",
         "reappeared_dynamics_runtime_confidence_naive_margin_uncertainty_error_pearson",
+        "reappeared_dynamics_runtime_confidence_candidate_margin_uncertainty_error_pearson",
+        "reappeared_dynamics_runtime_confidence_runtime_uncertainty_unsafe_auroc",
+        "reappeared_dynamics_runtime_confidence_runtime_uncertainty_unsafe_auprc",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_unsafe_auroc",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_unsafe_auprc",
+        "reappeared_dynamics_runtime_confidence_naive_margin_uncertainty_unsafe_auroc",
+        "reappeared_dynamics_runtime_confidence_naive_margin_uncertainty_unsafe_auprc",
+        "reappeared_dynamics_runtime_confidence_candidate_margin_uncertainty_unsafe_auroc",
+        "reappeared_dynamics_runtime_confidence_candidate_margin_uncertainty_unsafe_auprc",
         "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_high_error_lift",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_unsafe_lift",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_error_low_bucket_mean",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_error_mid_bucket_mean",
+        "reappeared_dynamics_runtime_confidence_calibrated_uncertainty_error_high_bucket_mean",
         "reappeared_dynamics_runtime_confidence_runtime_confidence_correct_decline_mean",
         "reappeared_dynamics_runtime_confidence_calibrated_confidence_correct_decline_mean",
         "reappeared_dynamics_runtime_confidence_runtime_confidence_drop_on_correct_declines",
