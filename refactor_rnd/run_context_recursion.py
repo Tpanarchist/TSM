@@ -168,24 +168,35 @@ def _summary_markdown(payload: dict) -> str:
 
     lines.extend([
         "",
-        "## Probe F - Order-Loss Split",
+        "## Probe F - Ordered Implication Split",
         "",
-        "Split Probe E order loss into phase error versus residual rank instability.",
-        "Phase error is the extra aligned-slot relief recovered by a translation-tolerant ordered probe; rank instability is the remaining order loss after that correction.",
+        "Split Probe E ordered implication damage into phase drift versus residual rank instability.",
+        "Phase drift means the same ranked implication survives but is shifted in time; rank instability means candidate continuations no longer keep lawful ordering.",
+        "Alignment errors below are measured on the stressed full ordered context and used to apportion degraded ordered implication damage.",
         "",
         f"- summary: {probe_f_diagnosis['summary']}",
         f"- most_total_order_loss_case: {probe_f_diagnosis['most_total_order_loss_case']}",
+        f"- most_ordered_implication_damage_case: {probe_f_diagnosis['most_ordered_implication_damage_case']}",
         f"- least_total_order_loss_case: {probe_f_diagnosis['least_total_order_loss_case']}",
-        f"- most_phase_error_case: {probe_f_diagnosis['most_phase_error_case']}",
-        f"- most_rank_instability_case: {probe_f_diagnosis['most_rank_instability_case']}",
+        f"- synthetic_phase_control_case: {probe_f_diagnosis['synthetic_phase_control_case']}",
+        f"- phase_control_validated: {probe_f_diagnosis['phase_control_validated']}",
+        f"- overall_most_phase_error_case: {probe_f_diagnosis['overall_most_phase_error_case']}",
+        f"- overall_most_rank_instability_case: {probe_f_diagnosis['overall_most_rank_instability_case']}",
+        f"- natural_stressor_most_phase_like_case: {probe_f_diagnosis['most_natural_phase_error_case']}",
+        f"- natural_stressor_most_rank_instability_case: {probe_f_diagnosis['most_natural_rank_instability_case']}",
+        f"- ordered_implication_interpretation: {probe_f_diagnosis['ordered_implication_interpretation']}",
+        f"- phase_pov_interpretation: {probe_f_diagnosis['phase_pov_interpretation']}",
+        f"- rank_instability_pov_interpretation: {probe_f_diagnosis['rank_instability_pov_interpretation']}",
+        f"- pure_phase_offset_interpretation: {probe_f_diagnosis['pure_phase_offset_interpretation']}",
+        f"- variable_lag_interpretation: {probe_f_diagnosis['variable_lag_interpretation']}",
         "",
-        "| stress_case | phase_error_score | rank_instability_score | total_order_loss_score | strict_order_alignment_error | phase_tolerant_order_alignment_error | order_failure_mode |",
+        "| stress_case | phase_error_score | rank_instability_score | ordered_implication_damage_score | strict_order_alignment_error | phase_tolerant_order_alignment_error | order_failure_mode |",
         "|---|---:|---:|---:|---:|---:|---|",
     ])
     for row in probe_f["table"]:
         lines.append(
             f"| {row['stress_case']} | {row['phase_error_score']:.3f} | {row['rank_instability_score']:.3f} | "
-            f"{row['total_order_loss_score']:.3f} | {row['strict_order_alignment_error']:.3f} | "
+            f"{row['ordered_implication_damage_score']:.3f} | {row['strict_order_alignment_error']:.3f} | "
             f"{row['phase_tolerant_order_alignment_error']:.3f} | {row['order_failure_mode']} |"
         )
     return "\n".join(lines) + "\n"

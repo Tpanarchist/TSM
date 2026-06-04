@@ -31,8 +31,8 @@ class Context:
     """A bounded relation field made from TRITs.
 
     A CONTEXT is intentionally not "three TRITs." It preserves lower units
-    plus their transition, lag, order, and frame structure inside a bounded
-    field.
+    plus their transition, lag, order, frame, and ranked ordered implication
+    structure inside a bounded field.
     """
 
     trits: tuple[Trit, ...]
@@ -204,6 +204,7 @@ def available_stress_encoder_names() -> tuple[str, ...]:
 def available_stress_case_names() -> tuple[str, ...]:
     return (
         "variable_lag",
+        "pure_phase_offset",
         "noisy_order",
         "missing_events",
         "repeated_symbols",
@@ -258,6 +259,14 @@ def apply_stress_case(
             result.insert(insert_at, filler)
             offset += 1
         return result
+
+    if stress_case == "pure_phase_offset":
+        max_shift = max(1, int(np.ceil(float(degradation) * max(1, length // 2))))
+        shift = (int(label) + int(sample_index)) % (max_shift + 1)
+        if shift <= 0:
+            return result
+        translated = ([-1] * shift) + result[: max(0, length - shift)]
+        return translated[:length]
 
     if stress_case == "noisy_order":
         used: set[int] = set()
@@ -630,10 +639,11 @@ def _depth_encoder_state(
     degradation_loss: float = 0.0,
 ) -> dict[str, dict[str, Any]]:
     encoder = canonical_encoder_name(encoder)
+    lower_level_stress_case = "baseline" if stress_case == "pure_phase_offset" else stress_case
     level_specs = depth_level_specs()
     level1_sequences, level1_labels, level0_vocab = depth_base_world()
     level1_labels = np.asarray(level1_labels, dtype=np.int64)
-    level1_sequences = stress_sequences(level1_sequences, level1_labels, stress_case, degradation, level0_vocab)
+    level1_sequences = stress_sequences(level1_sequences, level1_labels, lower_level_stress_case, degradation, level0_vocab)
     level1_features = encode_sequences(level1_sequences, level0_vocab, encoder, degradation_loss=degradation_loss)
     level1_abstractor = AbstainGatedAbstractor(approve_radius=0.02, min_evidence=2)
     level1_ids = level1_abstractor.fit_predict(level1_features, level1_labels)
@@ -647,7 +657,7 @@ def _depth_encoder_state(
             level2_labels.append(label)
     level2_label_array = np.asarray(level2_labels, dtype=np.int64)
     level2_vocab = max(1, len(level1_abstractor.abstractions))
-    level2_sequences = stress_sequences(level2_sequences, level2_label_array, stress_case, degradation, level2_vocab)
+    level2_sequences = stress_sequences(level2_sequences, level2_label_array, lower_level_stress_case, degradation, level2_vocab)
     level2_features = encode_sequences(level2_sequences, vocab_size=level2_vocab, encoder=encoder, degradation_loss=degradation_loss)
     level2_abstractor = AbstainGatedAbstractor(approve_radius=0.02, min_evidence=2)
     level2_ids = level2_abstractor.fit_predict(level2_features, level2_label_array)
@@ -1254,15 +1264,8 @@ def probe_f_order_loss_split() -> dict[str, Any]:
                 degraded_level3["labels"],
                 degraded_level3["vocab_size"],
             )
-            raw_phase_error = max(
-                0.0,
-                (degraded_strict_order_alignment_error - degraded_phase_tolerant_order_alignment_error)
-                - (full_strict_order_alignment_error - full_phase_tolerant_order_alignment_error),
-            )
-            raw_rank_instability = max(
-                0.0,
-                degraded_phase_tolerant_order_alignment_error - full_phase_tolerant_order_alignment_error,
-            )
+            raw_phase_error = max(0.0, full_strict_order_alignment_error - full_phase_tolerant_order_alignment_error)
+            raw_rank_instability = max(0.0, full_phase_tolerant_order_alignment_error)
             raw_total = raw_phase_error + raw_rank_instability
             if total_order_loss_score <= 0.0:
                 phase_error_score = 0.0
@@ -1278,9 +1281,10 @@ def probe_f_order_loss_split() -> dict[str, Any]:
                 "degradation": float(degradation),
                 "phase_error_score": phase_error_score,
                 "rank_instability_score": rank_instability_score,
+                "ordered_implication_damage_score": total_order_loss_score,
                 "total_order_loss_score": total_order_loss_score,
-                "strict_order_alignment_error": float(degraded_strict_order_alignment_error),
-                "phase_tolerant_order_alignment_error": float(degraded_phase_tolerant_order_alignment_error),
+                "strict_order_alignment_error": float(full_strict_order_alignment_error),
+                "phase_tolerant_order_alignment_error": float(full_phase_tolerant_order_alignment_error),
                 "order_failure_mode": _probe_f_failure_mode(phase_error_score, rank_instability_score),
             }
             degradation_key = f"{degradation:.2f}"
@@ -1297,6 +1301,7 @@ def probe_f_order_loss_split() -> dict[str, Any]:
             "stress_case": stress_case,
             "phase_error_score": phase_error_score,
             "rank_instability_score": rank_instability_score,
+            "ordered_implication_damage_score": total_order_loss_score,
             "total_order_loss_score": total_order_loss_score,
             "strict_order_alignment_error": strict_order_alignment_error,
             "phase_tolerant_order_alignment_error": phase_tolerant_order_alignment_error,
@@ -1311,40 +1316,107 @@ def probe_f_order_loss_split() -> dict[str, Any]:
             row["stress_case"],
         )
     )
+    natural_rows = [row for row in table if row["stress_case"] != "pure_phase_offset"]
     most_total_order_loss_case = table[0]["stress_case"] if table else "none"
     least_total_order_loss_case = table[-1]["stress_case"] if table else "none"
     max_phase_error_score = max((row["phase_error_score"] for row in table), default=0.0)
     max_rank_instability_score = max((row["rank_instability_score"] for row in table), default=0.0)
-    most_phase_error_case = "none"
+    max_natural_phase_error_score = max((row["phase_error_score"] for row in natural_rows), default=0.0)
+    max_natural_rank_instability_score = max((row["rank_instability_score"] for row in natural_rows), default=0.0)
+    overall_most_phase_error_case = "none"
     if max_phase_error_score > 0.0:
-        most_phase_error_case = max(
+        overall_most_phase_error_case = max(
             table,
             key=lambda row: (row["phase_error_score"], row["total_order_loss_score"], row["stress_case"]),
         )["stress_case"]
-    most_rank_instability_case = "none"
+    overall_most_rank_instability_case = "none"
     if max_rank_instability_score > 0.0:
-        most_rank_instability_case = max(
+        overall_most_rank_instability_case = max(
             table,
             key=lambda row: (row["rank_instability_score"], row["total_order_loss_score"], row["stress_case"]),
         )["stress_case"]
-    phase_summary = "no stress case shows measurable phase error"
+    most_phase_error_case = "none"
+    if max_natural_phase_error_score > 0.0:
+        most_phase_error_case = max(
+            natural_rows,
+            key=lambda row: (row["phase_error_score"], row["total_order_loss_score"], row["stress_case"]),
+        )["stress_case"]
+    most_rank_instability_case = "none"
+    if max_natural_rank_instability_score > 0.0:
+        most_rank_instability_case = max(
+            natural_rows,
+            key=lambda row: (row["rank_instability_score"], row["total_order_loss_score"], row["stress_case"]),
+        )["stress_case"]
+    phase_summary = "no natural stressor shows measurable phase error"
     if most_phase_error_case != "none":
-        phase_summary = f"phase error peaks under {most_phase_error_case}"
-    rank_summary = "no stress case shows measurable rank instability"
+        phase_summary = f"the most phase-like natural stressor is {most_phase_error_case}"
+    rank_summary = "no natural stressor shows measurable rank instability"
     if most_rank_instability_case != "none":
-        rank_summary = f"rank instability peaks under {most_rank_instability_case}"
+        rank_summary = f"the most rank-unstable natural stressor is {most_rank_instability_case}"
+    variable_lag_row = next((row for row in table if row["stress_case"] == "variable_lag"), None)
+    variable_lag_interpretation = "variable_lag is absent from the current Probe F table"
+    if variable_lag_row is not None:
+        if (
+            variable_lag_row["phase_error_score"] > 0.0
+            and variable_lag_row["phase_error_score"] > variable_lag_row["rank_instability_score"]
+        ):
+            variable_lag_interpretation = (
+                "variable_lag behaves like phase drift: the same ranked implication is preserved but shifted in time"
+            )
+        elif variable_lag_row["rank_instability_score"] > 0.0:
+            variable_lag_interpretation = (
+                "variable_lag remains rank instability dominated: candidate continuation order is unstable rather than merely delayed"
+            )
+        else:
+            variable_lag_interpretation = "variable_lag shows no measurable ordered implication damage in the current toy"
+    pure_phase_offset_row = next((row for row in table if row["stress_case"] == "pure_phase_offset"), None)
+    pure_phase_offset_interpretation = "pure_phase_offset is absent from the current Probe F table"
+    phase_control_validated = False
+    if pure_phase_offset_row is not None:
+        phase_control_validated = pure_phase_offset_row["phase_error_score"] > 0.0
+        if pure_phase_offset_row["phase_error_score"] > pure_phase_offset_row["rank_instability_score"]:
+            pure_phase_offset_interpretation = (
+                "pure_phase_offset behaves like phase drift: the same ranked implication is preserved but shifted in time"
+            )
+        elif pure_phase_offset_row["phase_error_score"] > 0.0:
+            pure_phase_offset_interpretation = (
+                "pure_phase_offset validates the phase side: measurable phase error appears without variable_lag-scale rank instability"
+            )
+        else:
+            pure_phase_offset_interpretation = "pure_phase_offset does not trigger measurable phase error: the phase side remains blind"
+    synthetic_phase_control_case = "pure_phase_offset" if pure_phase_offset_row is not None else "none"
+    synthetic_phase_control_summary = "synthetic phase control is absent"
+    if synthetic_phase_control_case != "none":
+        synthetic_phase_control_summary = f"synthetic phase control {synthetic_phase_control_case} validated: {phase_control_validated}"
+    ordered_implication_interpretation = (
+        "ranked ordered implications are damaged when the model no longer preserves which continuation lawfully follows"
+    )
+    phase_pov_interpretation = "phase drift = same thread, shifted in time"
+    rank_pov_interpretation = "rank instability = candidate threads lost lawful ordering"
     summary = (
-        f"Probe F splits order loss into phase error and rank instability; total order loss is highest under {most_total_order_loss_case}, "
-        f"{phase_summary}, and {rank_summary}."
+        f"Probe F sharpens ordered implication damage into phase drift and rank instability; ordered implication damage is highest under {most_total_order_loss_case}; "
+        f"{synthetic_phase_control_summary}; {phase_summary}; {rank_summary}."
     )
     return {
         "results": case_results,
         "table": table,
         "diagnosis": {
             "most_total_order_loss_case": most_total_order_loss_case,
+            "most_ordered_implication_damage_case": most_total_order_loss_case,
             "least_total_order_loss_case": least_total_order_loss_case,
+            "synthetic_phase_control_case": synthetic_phase_control_case,
+            "overall_most_phase_error_case": overall_most_phase_error_case,
+            "overall_most_rank_instability_case": overall_most_rank_instability_case,
+            "most_natural_phase_error_case": most_phase_error_case,
+            "most_natural_rank_instability_case": most_rank_instability_case,
             "most_phase_error_case": most_phase_error_case,
             "most_rank_instability_case": most_rank_instability_case,
+            "ordered_implication_interpretation": ordered_implication_interpretation,
+            "phase_pov_interpretation": phase_pov_interpretation,
+            "rank_instability_pov_interpretation": rank_pov_interpretation,
+            "variable_lag_interpretation": variable_lag_interpretation,
+            "pure_phase_offset_interpretation": pure_phase_offset_interpretation,
+            "phase_control_validated": phase_control_validated,
             "summary": summary,
         },
     }

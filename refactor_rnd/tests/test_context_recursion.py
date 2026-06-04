@@ -5,6 +5,7 @@ import numpy as np
 from refactor_rnd.context_recursion import (
     Abstraction,
     AbstainGatedAbstractor,
+    aggregate_results,
     apply_stress_case,
     Context,
     Trit,
@@ -33,6 +34,7 @@ from refactor_rnd.context_recursion import (
     stress_degradation_levels,
     transition_lag_order_encoder,
 )
+from refactor_rnd.run_context_recursion import _summary_markdown
 
 
 def test_context_is_variable_size_relation_context():
@@ -168,6 +170,12 @@ def test_variable_lag_inserts_delay_steps_literally():
     assert stressed == [0, 0, 1, 2, 3]
 
 
+def test_pure_phase_offset_translates_sequence_with_blank_padding():
+    stressed = apply_stress_case([0, 1, 2, 3], "pure_phase_offset", degradation=1.00, label=0, sample_index=1, vocab_size=4)
+
+    assert stressed == [-1, 0, 1, 2]
+
+
 def test_missing_events_removes_steps_literally():
     stressed = apply_stress_case([0, 1, 2, 3, 4, 5], "missing_events", degradation=0.75, label=0, sample_index=0, vocab_size=6)
 
@@ -232,12 +240,24 @@ def test_probe_e_table_matches_mean_degradation_rows():
 
 def test_probe_f_order_loss_split_reports_case_scores():
     decomposition = probe_f_order_loss_split()
+    diagnosis = decomposition["diagnosis"]
 
     assert set(decomposition["results"]) == set(available_stress_case_names())
     assert len(decomposition["table"]) == len(available_stress_case_names())
-    assert decomposition["diagnosis"]["most_total_order_loss_case"] in set(available_stress_case_names())
-    assert decomposition["diagnosis"]["most_phase_error_case"] in set(available_stress_case_names()) | {"none"}
-    assert decomposition["diagnosis"]["most_rank_instability_case"] in set(available_stress_case_names()) | {"none"}
+    assert diagnosis["most_total_order_loss_case"] in set(available_stress_case_names())
+    assert diagnosis["most_ordered_implication_damage_case"] == diagnosis["most_total_order_loss_case"]
+    assert diagnosis["synthetic_phase_control_case"] == "pure_phase_offset"
+    assert diagnosis["overall_most_phase_error_case"] in set(available_stress_case_names()) | {"none"}
+    assert diagnosis["overall_most_rank_instability_case"] in set(available_stress_case_names()) | {"none"}
+    assert diagnosis["most_natural_phase_error_case"] in (set(available_stress_case_names()) - {"pure_phase_offset"}) | {"none"}
+    assert diagnosis["most_natural_rank_instability_case"] in (set(available_stress_case_names()) - {"pure_phase_offset"}) | {"none"}
+    assert diagnosis["most_phase_error_case"] in set(available_stress_case_names()) | {"none"}
+    assert diagnosis["most_rank_instability_case"] in set(available_stress_case_names()) | {"none"}
+    assert "ranked ordered implications" in diagnosis["ordered_implication_interpretation"]
+    assert diagnosis["phase_pov_interpretation"] == "phase drift = same thread, shifted in time"
+    assert diagnosis["rank_instability_pov_interpretation"] == "rank instability = candidate threads lost lawful ordering"
+    assert diagnosis["phase_control_validated"] is True
+    assert "phase" in diagnosis["pure_phase_offset_interpretation"]
 
 
 def test_probe_f_table_matches_mean_degradation_rows_and_ranking():
@@ -247,6 +267,9 @@ def test_probe_f_table_matches_mean_degradation_rows_and_ranking():
     for stress_case, rows in decomposition["results"].items():
         expected_phase = float(np.mean([row["phase_error_score"] for row in rows.values()]))
         expected_rank = float(np.mean([row["rank_instability_score"] for row in rows.values()]))
+        expected_ordered_implication_damage = float(
+            np.mean([row["ordered_implication_damage_score"] for row in rows.values()])
+        )
         expected_total = float(np.mean([row["total_order_loss_score"] for row in rows.values()]))
         expected_strict = float(np.mean([row["strict_order_alignment_error"] for row in rows.values()]))
         expected_phase_tolerant = float(np.mean([row["phase_tolerant_order_alignment_error"] for row in rows.values()]))
@@ -254,7 +277,9 @@ def test_probe_f_table_matches_mean_degradation_rows_and_ranking():
 
         assert np.isclose(row["phase_error_score"], expected_phase)
         assert np.isclose(row["rank_instability_score"], expected_rank)
+        assert np.isclose(row["ordered_implication_damage_score"], expected_ordered_implication_damage)
         assert np.isclose(row["total_order_loss_score"], expected_total)
+        assert np.isclose(row["ordered_implication_damage_score"], row["total_order_loss_score"])
         assert np.isclose(row["strict_order_alignment_error"], expected_strict)
         assert np.isclose(row["phase_tolerant_order_alignment_error"], expected_phase_tolerant)
         assert row["order_failure_mode"] in {
@@ -280,8 +305,39 @@ def test_probe_f_table_matches_mean_degradation_rows_and_ranking():
     actual_order = [row["stress_case"] for row in decomposition["table"]]
     assert actual_order == expected_order
     assert decomposition["diagnosis"]["most_total_order_loss_case"] == expected_order[0]
+    pure_phase_offset = table_by_case["pure_phase_offset"]
+    variable_lag = table_by_case["variable_lag"]
+    noisy_order = table_by_case["noisy_order"]
+    assert decomposition["diagnosis"]["phase_control_validated"] is True
+    assert decomposition["diagnosis"]["most_natural_rank_instability_case"] == "variable_lag"
+    assert decomposition["diagnosis"]["most_natural_phase_error_case"] != "pure_phase_offset"
+    assert pure_phase_offset["phase_error_score"] > 0.0
+    assert pure_phase_offset["rank_instability_score"] < variable_lag["rank_instability_score"]
+    assert pure_phase_offset["rank_instability_score"] < noisy_order["rank_instability_score"]
     if np.isclose(max(row["phase_error_score"] for row in decomposition["table"]), 0.0):
         assert decomposition["diagnosis"]["most_phase_error_case"] == "none"
+        assert "phase drift" not in decomposition["diagnosis"]["variable_lag_interpretation"]
+    assert "rank instability" in decomposition["diagnosis"]["variable_lag_interpretation"] or "phase drift" in decomposition["diagnosis"]["variable_lag_interpretation"]
+
+
+def test_probe_f_summary_uses_ordered_implication_language():
+    metrics = run_all(seed=31)
+    payload = {
+        "aggregate": aggregate_results([metrics]),
+        "per_seed": [metrics],
+    }
+
+    summary = _summary_markdown(payload)
+
+    assert "## Probe F - Ordered Implication Split" in summary
+    assert "ordered_implication_damage_score" in summary
+    assert "synthetic_phase_control_case: pure_phase_offset" in summary
+    assert "phase_control_validated: True" in summary
+    assert "natural_stressor_most_phase_like_case:" in summary
+    assert "natural_stressor_most_rank_instability_case: variable_lag" in summary
+    assert "pure_phase_offset_interpretation:" in summary
+    assert "variable_lag_interpretation:" in summary
+    assert "rank instability" in summary
 
 
 def test_probe_d_damage_ranking_matches_level3_deltas():

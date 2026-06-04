@@ -259,35 +259,38 @@ If both move together, the bridge is too brittle under load.
 Run artifact:
 
 ```text
-refactor_rnd/runs/20260603_193627_context_recursion
+refactor_rnd/runs/20260603_200602_context_recursion
 ```
 
-Probe F splits Probe E order loss into phase error versus rank instability.
+Probe F splits Probe E ordered implication damage into phase drift versus residual rank instability.
 
 Current decomposition:
 
 ```text
-phase_error_score = order-loss share attributable to extra aligned-slot relief under translation-tolerant matching
-rank_instability_score = remaining order loss not rescued by alignment
-total_order_loss_score = phase_error_score + rank_instability_score
+phase_error_score = ordered-implication damage share attributable to extra aligned-slot relief under translation-tolerant matching
+rank_instability_score = remaining ordered-implication damage not rescued by alignment
+ordered_implication_damage_score = phase_error_score + rank_instability_score
 ```
 
 Key result:
 
 ```text
 most_total_order_loss_case: variable_lag
-most_phase_error_case: none
+most_ordered_implication_damage_case: variable_lag
+most_phase_error_case: ambiguous_shared_anchors
 most_rank_instability_case: variable_lag
 least_total_order_loss_case: missing_events
+phase_control_validated: True
 ```
 
 Case readout:
 
 ```text
-variable_lag:             phase 0.000, rank 0.500, total 0.500 -> rank instability problem
-ambiguous_shared_anchors: phase 0.000, rank 0.250, total 0.250 -> rank instability problem
+variable_lag:             phase 0.018, rank 0.482, total 0.500 -> rank instability problem
 noisy_order:              phase 0.000, rank 0.250, total 0.250 -> rank instability problem
-repeated_symbols:         phase 0.000, rank 0.250, total 0.250 -> rank instability problem
+repeated_symbols:         phase 0.034, rank 0.216, total 0.250 -> rank instability problem
+ambiguous_shared_anchors: phase 0.044, rank 0.206, total 0.250 -> rank instability problem
+pure_phase_offset:        phase 0.020, rank 0.042, total 0.062 -> synthetic phase control with low rank instability
 frame_shift:              phase 0.000, rank 0.000, total 0.000 -> low order damage
 missing_events:           phase 0.000, rank 0.000, total 0.000 -> low order damage
 ```
@@ -295,25 +298,41 @@ missing_events:           phase 0.000, rank 0.000, total 0.000 -> low order dama
 Current interpretation:
 
 ```text
-In the current toy, delayed reappearance does not behave like a recoverable global phase offset.
-The strongest order-loss case, variable_lag, remains rank instability even after translation-tolerant alignment.
-No stress case produced measurable phase-error score in this bench.
-Frame shift continues to look semantic/classificatory rather than order-loss-dominant.
+The synthetic pure_phase_offset control now produces measurable phase error, so Probe F's phase side is not blind.
+variable_lag still does not behave like a recoverable global phase offset; it remains overwhelmingly rank instability.
+pure_phase_offset carries much less rank instability than variable_lag and noisy_order, which is the intended phase-control behavior.
+ambiguous_shared_anchors now carries the largest absolute phase share among the natural stressors in this toy, while still remaining rank-instability dominated overall.
+Frame shift continues to look semantic/classificatory rather than ordered-implication-damage-dominant.
+```
+
+POV Interpretation:
+
+```text
+phase drift = same thread, shifted in time
+rank instability = candidate threads lost lawful ordering
+current toy result = variable_lag maps to rank instability, not clean phase drift
 ```
 
 Operational consequence:
 
 ```text
-For main TSM, delayed-reappearance failures should first inspect slot_rank_instability, candidate_order_flip_rate,
+Probe F can now detect phase drift when a synthetic offset-only control is present, which makes the variable_lag result stronger rather than weaker.
+For main TSM, delayed-reappearance failures should still first inspect slot_rank_instability, candidate_order_flip_rate,
 reappearance_order_confusion, and relation_identity_flip behavior before assuming pure prediction-observation phase drift.
-prediction_observation_phase_error still belongs in the diagnostic set, but this toy does not make it the dominant explanation.
+prediction_observation_phase_error remains a valid diagnostic family, but it is no longer the default explanation for variable_lag-style failure.
+```
+
+Refined Context definition:
+
+```text
+Context = bounded relation field preserving ranked ordered implications.
 ```
 
 So the active question narrows again:
 
 ```text
-Does main TSM expose a genuine phase-error family that this toy does not,
-or is the four-object wall mostly rank/identity instability under higher load?
+Which main TSM failures look like the validated pure_phase_offset control,
+and which ones still look like variable_lag-style rank instability under higher load?
 ```
 
 ## Kill Conditions

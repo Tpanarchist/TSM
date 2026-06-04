@@ -6,7 +6,7 @@ Terminology used here:
 
 ```text
 TRIT  = ternary vote unit: Approve / Deny / Abstain
-CONTEXT = bounded relation field with order/lag-sensitive structure
+CONTEXT = bounded relation field preserving ranked ordered implications
 ABSTRACTION = reusable classified structure
 ```
 
@@ -23,12 +23,15 @@ TSM converts XP into TRITs, organizes TRITs into Contexts, and classifies stable
 
 A Context is not a histogram and not a bag of units. A Context is a bounded,
 order-sensitive relation field over TRITs or Abstractions. It must preserve
-enough transition, lag, order, and frame structure for the next recursion
-level to recover what the prior level meant.
+enough transition, lag, order, frame, and candidate-rank continuity for the
+next recursion level to recover what the prior level meant.
 
 The bench tests one narrow claim: higher recursion should receive structured CONTEXTS,
-not histograms of lower-unit firings. A CONTEXT must preserve ordered relation,
-not just transition counts.
+not histograms of lower-unit firings. A CONTEXT must preserve ranked ordered
+implications, not just transition counts.
+
+Probe F also carries a synthetic `pure_phase_offset` stressor so the bench can
+verify phase-drift detection separately from rank-instability damage.
 
 Working stack:
 
@@ -50,10 +53,10 @@ Core loop:
 
 ```text
 TRITs vote.
-Contexts preserve ordered relation.
+Contexts preserve ranked ordered implications.
 Stable Contexts become Knowledge.
 Knowledge is classified into Abstractions.
-Abstractions re-enter new ordered Contexts.
+Abstractions re-enter new ranked Contexts.
 ```
 
 Run:
