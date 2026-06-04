@@ -259,10 +259,11 @@ If both move together, the bridge is too brittle under load.
 Run artifact:
 
 ```text
-refactor_rnd/runs/20260603_200602_context_recursion
+refactor_rnd/runs/20260603_201646_context_recursion
 ```
 
 Probe F splits Probe E ordered implication damage into phase drift versus residual rank instability.
+The synthetic control (`pure_phase_offset`) is reported separately from the natural stressors so the phase-control validation does not compete with the natural-stressor ranking in the same headline.
 
 Current decomposition:
 
@@ -272,15 +273,18 @@ rank_instability_score = remaining ordered-implication damage not rescued by ali
 ordered_implication_damage_score = phase_error_score + rank_instability_score
 ```
 
-Key result:
+Key result (split headline):
 
 ```text
+synthetic_phase_control_case: pure_phase_offset
+phase_control_validated: True
+natural_stressor_most_phase_like_case: ambiguous_shared_anchors
+natural_stressor_most_rank_instability_case: variable_lag
+overall_most_phase_error_case: ambiguous_shared_anchors
+overall_most_rank_instability_case: variable_lag
 most_total_order_loss_case: variable_lag
 most_ordered_implication_damage_case: variable_lag
-most_phase_error_case: ambiguous_shared_anchors
-most_rank_instability_case: variable_lag
 least_total_order_loss_case: missing_events
-phase_control_validated: True
 ```
 
 Case readout:
@@ -333,6 +337,14 @@ So the active question narrows again:
 ```text
 Which main TSM failures look like the validated pure_phase_offset control,
 and which ones still look like variable_lag-style rank instability under higher load?
+```
+
+## Kill Conditions
+
+- If same-marginal histograms recover regimes, the task is not isolating relations cleanly.
+- If CONTEXT relation-space fails on same-marginal or shared-anchor tasks, the context-dimension encoding is not sufficient even in the toy setting.
+- If novelty does not re-spike Abstain, the developmental thermometer claim is not reproduced here.
+rank instability under higher load?
 ```
 
 ## Kill Conditions
